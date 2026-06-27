@@ -1,0 +1,34 @@
+{
+  "name": "@kora/extension-sdk",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for building Kora extensions",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "bun test",
+    "lint": "neostandard",
+    "lint:fix": "neostandard --fix",
+    "prepublishOnly": "npm run build && npm run lint && npm test"
+  },
+  "keywords": ["kora", "extension", "sdk", "low-code"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/asenawritescode/kora-website.git",
+    "directory": "packages/extension-sdk"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "neostandard": "^0.11.0",
+    "typescript": "^5.7.0"
+  }
+}
