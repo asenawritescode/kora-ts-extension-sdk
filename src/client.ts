@@ -1,7 +1,38 @@
-import type { KoraClientConfig, ScriptRecord, ScriptCreateRequest, ScriptUpdateRequest, ScriptExecution, ExtensionRecord, ExtensionCreateRequest, DeliveryRecord, ExecuteResult } from './types.js'
+import type {
+  KoraClientConfig,
+  SiteContext,
+  ScriptRecord,
+  ScriptCreateRequest,
+  ScriptUpdateRequest,
+  ScriptExecution,
+  ExtensionRecord,
+  ExtensionCreateRequest,
+  DeliveryRecord,
+  ExecuteResult,
+  DocumentEnvelope,
+  ListEnvelope,
+  ListQuery,
+  DocType,
+  View,
+  Workflow,
+  FileRef,
+  Query,
+  MutationResult,
+  BulkDocItem,
+  BulkDocResult,
+} from './types.js'
 
 export class KoraClient {
-  readonly #config: Required<KoraClientConfig>
+  readonly #config: {
+    baseUrl: string
+    siteName: string
+    timeout: number
+    token?: string
+    authHeader?: string
+    authProvider?: KoraClientConfig['authProvider']
+    fetch?: typeof fetch
+  }
+  readonly #fetchImpl: typeof fetch
 
   constructor (config: KoraClientConfig) {
     this.#config = {
@@ -10,11 +41,188 @@ export class KoraClient {
     }
     // Strip trailing slash
     this.#config.baseUrl = this.#config.baseUrl.replace(/\/$/, '')
+    this.#config.siteName = this.#config.siteName.trim()
+    this.#fetchImpl = config.fetch ?? fetch
   }
 
   /** Execute a custom API method (extension endpoint) */
   async callMethod (name: string, body?: unknown): Promise<unknown> {
     return this.#request('POST', `/api/method/${encodeURIComponent(name)}`, body)
+  }
+
+  /** Return the current site context. */
+  getSiteContext (): SiteContext {
+    return {
+      baseUrl: this.#config.baseUrl,
+      siteName: this.#config.siteName,
+      authHeader: this.#config.authHeader,
+      timeout: this.#config.timeout,
+    }
+  }
+
+  /** List all DocTypes for the connected site. */
+  async listDoctypes (): Promise<DocType[]> {
+    const res = await this.#request<{ data: DocType[] }>('GET', '/api/system/doctypes')
+    return res.data
+  }
+
+  /** Get a single DocType definition. */
+  async getDoctype (doctype: string): Promise<DocType> {
+    const res = await this.#request<{ data: DocType }>('GET', `/api/system/doctype/${encodeURIComponent(doctype)}`)
+    return res.data
+  }
+
+  /** Get the configured views for the site. */
+  async listViews (): Promise<View[]> {
+    const res = await this.#request<{ data: View[] }>('GET', '/api/v1/system/views')
+    return res.data
+  }
+
+  /** Get a view by name. */
+  async getView (name: string): Promise<View> {
+    const res = await this.#request<{ data: View }>('GET', `/api/v1/system/views/${encodeURIComponent(name)}`)
+    return res.data
+  }
+
+  /** Get workflow config for a doctype. */
+  async getWorkflow (doctype: string): Promise<Workflow> {
+    const res = await this.#request<{ data: Workflow }>('GET', `/api/system/workflows/${encodeURIComponent(doctype)}`)
+    return res.data
+  }
+
+  /** Trigger a workflow action or submit a generic mutation payload. */
+  async submitAction<T = Record<string, unknown>> (actionId: string, body: Record<string, unknown>): Promise<MutationResult<T>> {
+    return this.#request<MutationResult<T>>('POST', `/api/v1/view/action/${encodeURIComponent(actionId)}`, body)
+  }
+
+  /** Get a document by doctype and name. */
+  async getDoc<T = Record<string, unknown>> (doctype: string, name: string): Promise<T> {
+    const res = await this.#request<DocumentEnvelope<T>>('GET', `/api/resource/${encodeURIComponent(doctype)}/${encodeURIComponent(name)}`)
+    return res.data
+  }
+
+  /** List documents for a doctype. */
+  async getList<T = Record<string, unknown>> (doctype: string, query: ListQuery = {}): Promise<T[]> {
+    const params = new URLSearchParams()
+    if (query.limit !== undefined) params.set('limit', String(query.limit))
+    if (query.offset !== undefined) params.set('offset', String(query.offset))
+    if (query.orderBy) params.set('order_by', query.orderBy)
+    if (query.filters !== undefined) {
+      params.set('filters', typeof query.filters === 'string'
+        ? query.filters
+        : JSON.stringify(query.filters))
+    }
+    if (query.fields && query.fields.length) params.set('fields', JSON.stringify(query.fields))
+    if (query.search) params.set('search', query.search)
+    if (query.groupBy) params.set('group_by', query.groupBy)
+    const queryString = params.toString()
+    const res = await this.#request<ListEnvelope<T>>('GET', `/api/resource/${encodeURIComponent(doctype)}${queryString ? `?${queryString}` : ''}`)
+    return res.data
+  }
+
+  /** Create a document. */
+  async createDoc<T = Record<string, unknown>> (doctype: string, doc: Record<string, unknown>): Promise<T> {
+    const res = await this.#request<DocumentEnvelope<T>>('POST', `/api/resource/${encodeURIComponent(doctype)}`, doc)
+    return res.data
+  }
+
+  /** Update a document. */
+  async updateDoc<T = Record<string, unknown>> (doctype: string, name: string, doc: Record<string, unknown>): Promise<T> {
+    const res = await this.#request<DocumentEnvelope<T>>('PUT', `/api/resource/${encodeURIComponent(doctype)}/${encodeURIComponent(name)}`, doc)
+    return res.data
+  }
+
+  /** Delete a document. */
+  async deleteDoc (doctype: string, name: string): Promise<void> {
+    await this.#request('DELETE', `/api/resource/${encodeURIComponent(doctype)}/${encodeURIComponent(name)}`)
+  }
+
+  /** Create many documents sequentially and collect per-item results. */
+  async bulkCreate<T = Record<string, unknown>> (items: Array<BulkDocItem<T>>): Promise<Array<BulkDocResult<T>>> {
+    const results: Array<BulkDocResult<T>> = []
+    for (const [index, item] of items.entries()) {
+      try {
+        const data = await this.createDoc<T>(item.doctype, item.doc ?? {})
+        results.push({
+          index,
+          doctype: item.doctype,
+          success: true,
+          data,
+        })
+      } catch (error) {
+        results.push({
+          index,
+          doctype: item.doctype,
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        })
+      }
+    }
+    return results
+  }
+
+  /** Update many documents sequentially and collect per-item results. */
+  async bulkUpdate<T = Record<string, unknown>> (items: Array<BulkDocItem<T> & { name: string }>): Promise<Array<BulkDocResult<T>>> {
+    const results: Array<BulkDocResult<T>> = []
+    for (const [index, item] of items.entries()) {
+      try {
+        const data = await this.updateDoc<T>(item.doctype, item.name, item.doc ?? {})
+        results.push({
+          index,
+          doctype: item.doctype,
+          name: item.name,
+          success: true,
+          data,
+        })
+      } catch (error) {
+        results.push({
+          index,
+          doctype: item.doctype,
+          name: item.name,
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        })
+      }
+    }
+    return results
+  }
+
+  /** Delete many documents sequentially and collect per-item results. */
+  async bulkDelete (items: Array<{ doctype: string; name: string }>): Promise<Array<BulkDocResult<void>>> {
+    const results: Array<BulkDocResult<void>> = []
+    for (const [index, item] of items.entries()) {
+      try {
+        await this.deleteDoc(item.doctype, item.name)
+        results.push({
+          index,
+          doctype: item.doctype,
+          name: item.name,
+          success: true,
+        })
+      } catch (error) {
+        results.push({
+          index,
+          doctype: item.doctype,
+          name: item.name,
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        })
+      }
+    }
+    return results
+  }
+
+  /** Upload a file attachment to the connected site. */
+  async uploadFile (file: File | Blob, filename?: string): Promise<FileRef> {
+    const formData = new FormData()
+    formData.append('file', file, filename || ('name' in file && typeof file.name === 'string' ? file.name : 'file'))
+    return this.#requestMultipart<FileRef>('/api/upload', formData)
+  }
+
+  /** Build a site-scoped file URL. */
+  getFileUrl (path: string): string {
+    const clean = path.replace(/^\/+/, '')
+    return `${this.#basePath()}/files/${clean}`
   }
 
   // ━━ Scripts ━━
@@ -90,17 +298,18 @@ export class KoraClient {
   // ━━ Internal ━━
 
   async #request<T> (method: string, path: string, body?: unknown): Promise<T> {
-    const url = `${this.#config.baseUrl}${path}`
+    const url = `${this.#basePath()}${path}`
     const headers: Record<string, string> = {
-      'Authorization': `Bearer ${this.#config.token}`,
       'Content-Type': 'application/json',
     }
+    const authHeader = await this.#resolveAuthHeader()
+    if (authHeader) headers.Authorization = authHeader
 
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), this.#config.timeout)
 
     try {
-      const response = await fetch(url, {
+      const response = await this.#fetchImpl(url, {
         method,
         headers,
         body: body ? JSON.stringify(body) : undefined,
@@ -118,6 +327,47 @@ export class KoraClient {
     } finally {
       clearTimeout(timer)
     }
+  }
+
+  async #requestMultipart<T> (path: string, body: FormData): Promise<T> {
+    const url = `${this.#basePath()}${path}`
+    const headers: Record<string, string> = {}
+    const authHeader = await this.#resolveAuthHeader()
+    if (authHeader) headers.Authorization = authHeader
+
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), this.#config.timeout)
+
+    try {
+      const response = await this.#fetchImpl(url, {
+        method: 'POST',
+        headers,
+        body,
+        signal: controller.signal,
+      })
+      const data = await response.json()
+      if (!response.ok) {
+        const errMsg = typeof data.error === 'string' ? data.error : data.error?.message || response.statusText
+        throw new KoraError(errMsg, response.status, data.error)
+      }
+      return data.data as T
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  async #resolveAuthHeader (): Promise<string | undefined> {
+    if (this.#config.authHeader) return this.#config.authHeader
+    if (this.#config.authProvider) {
+      const value = await this.#config.authProvider()
+      if (value) return value
+    }
+    if (this.#config.token) return `Bearer ${this.#config.token}`
+    return undefined
+  }
+
+  #basePath (): string {
+    return `${this.#config.baseUrl}/s/${encodeURIComponent(this.#config.siteName)}`
   }
 }
 

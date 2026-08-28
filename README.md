@@ -1,6 +1,21 @@
 # @kora/extension-sdk
 
-TypeScript SDK for building extensions on the [Kora](https://github.com/asenawritescode/kora) platform.
+Generic TypeScript SDK for the Kora engine.
+
+This package is intentionally generic:
+
+- it does not know about CMS-specific public content flows
+- it does not depend on any UI framework
+- it can be used from web apps, React Native, Node services, scripts, and internal tooling
+
+It is useful for:
+
+- custom API clients
+- internal backend services
+- React or React Native apps
+- script-driven integrations
+- workflow automation
+- extension management
 
 ## Installation
 
@@ -8,62 +23,298 @@ TypeScript SDK for building extensions on the [Kora](https://github.com/asenawri
 npm install @kora/extension-sdk
 ```
 
-## Quick Start
+## What It Can Do
 
-```typescript
+The client exposes:
+
+- `callMethod(name, body?)`
+- `getDoc(doctype, name)`
+- `getList(doctype, query?)`
+- `createDoc(doctype, doc)`
+- `updateDoc(doctype, name, doc)`
+- `deleteDoc(doctype, name)`
+- `bulkCreate(items)`
+- `bulkUpdate(items)`
+- `bulkDelete(items)`
+- script management
+- extension/webhook management
+- execution log access
+
+It also exports engine-aligned config types for:
+
+- `DocType`
+- `SiteContext`
+- `Field`
+- `View`
+- `ViewComponent`
+- `ViewAction`
+- `ViewRule`
+- `ViewFilter`
+- `ViewPublicAccess`
+- `PublicAccess`
+- `Document`
+- `Query`
+- `MutationResult`
+- `BulkDocItem`
+- `BulkDocResult`
+- `Workflow`
+- `FileRef`
+
+## Configuration
+
+```ts
 import { KoraClient } from '@kora/extension-sdk'
 
 const kora = new KoraClient({
   baseUrl: 'https://myapp.kora.dev',
-  token: 'kxt_your_extension_token'
+  siteName: 'acme',
+  token: 'kxt_your_token',
+})
+```
+
+Supported auth patterns:
+
+```ts
+// Bearer token
+new KoraClient({
+  baseUrl: 'https://myapp.kora.dev',
+  siteName: 'acme',
+  token: 'kxt_your_token',
 })
 
-// Create a validation script
-const script = await kora.createScript({
+// Explicit auth header
+new KoraClient({
+  baseUrl: 'https://myapp.kora.dev',
+  siteName: 'acme',
+  authHeader: 'Bearer kxt_your_token',
+})
+
+// Dynamic auth provider
+new KoraClient({
+  baseUrl: 'https://myapp.kora.dev',
+  siteName: 'acme',
+  authProvider: async () => `Bearer ${await getTokenSomehow()}`,
+})
+```
+
+You can also inject a custom `fetch` implementation for environments that do not expose a global `fetch`.
+
+All requests are site-scoped under:
+
+```text
+/s/:siteName/api/...
+```
+
+## Document CRUD
+
+```ts
+const customer = await kora.getDoc<{ name: string; email: string }>('Customer', 'CUST-0001')
+
+const customers = await kora.getList<{ name: string; full_name: string }>('Customer', {
+  limit: 20,
+  offset: 0,
+  filters: [['status', '=', 'Active']],
+  orderBy: 'modified DESC',
+})
+
+await kora.createDoc('Feedback', {
+  title: 'Great product',
+  rating: 5,
+})
+
+await kora.updateDoc('Feedback', 'FDB-0001', {
+  rating: 4,
+})
+
+await kora.deleteDoc('Feedback', 'FDB-0001')
+
+const bulkCreated = await kora.bulkCreate([
+  { doctype: 'Feedback', doc: { title: 'Great product', rating: 5 } },
+  { doctype: 'Feedback', doc: { title: 'Needs work', rating: 2 } },
+])
+
+const bulkUpdated = await kora.bulkUpdate([
+  { doctype: 'Feedback', name: 'FDB-0001', doc: { rating: 4 } },
+])
+
+const bulkDeleted = await kora.bulkDelete([
+  { doctype: 'Feedback', name: 'FDB-0002' },
+])
+```
+
+## Generic API Method Calls
+
+```ts
+const result = await kora.callMethod('send_invoice', { orderId: 'ORD-0001' })
+```
+
+## Script Management
+
+```ts
+await kora.createScript({
   name: 'validate_order',
   script_type: 'doc_event',
   doctype: 'Order',
   event: 'before_save',
-  script: `kora.log.info('Validating order:', event.doc.name);
-if (!event.doc.total || event.doc.total <= 0) {
-  throw new Error('Total must be greater than zero');
-}
-return { doc: event.doc };`
+  script: `
+    if (!event.doc.total || event.doc.total <= 0) {
+      throw new Error('Total must be greater than zero')
+    }
+  `,
 })
-
-// Call a custom API method
-const result = await kora.callMethod('send_invoice', { orderId: 'ORD-0001' })
 ```
 
-## API Reference
+## Extension Management
 
-### KoraClient
+```ts
+const extension = await kora.createExtension({
+  name: 'warehouse_webhook',
+  display_name: 'Warehouse Webhook',
+  endpoint_url: 'https://hooks.example.com/kora',
+  subscriptions: ['after_insert:Delivery'],
+  api_permissions: ['read'],
+})
+```
 
-- `callMethod(name, body?)` — Execute a custom API method
-- `listScripts()` — List all scripts
-- `getScript(name)` — Get script by name
-- `createScript(req)` — Create a new script
-- `updateScript(name, req)` — Update a script
-- `deleteScript(name)` — Delete a script
-- `getScriptExecutions(name)` — Get execution logs
-- `validateScript(script)` — Validate script syntax
-- `listExtensions()` — List all extensions
-- `createExtension(req)` — Create a new extension
-- `deleteExtension(name)` — Delete an extension
-- `getDeliveries(name)` — Get webhook delivery logs
-- `rotateSecret(name)` — Rotate extension HMAC secret
+## React Native Usage
 
-### Types
+The SDK is suitable for React Native because it is not tied to browser APIs.
 
-Full type definitions are exported for `ScriptRecord`, `ExtensionRecord`, `DeliveryRecord`, `ExecuteRequest`, `ExecuteResult`, and more.
+```ts
+import { useEffect, useState } from 'react'
+import { KoraClient } from '@kora/extension-sdk'
+
+const kora = new KoraClient({
+  baseUrl: 'https://myapp.kora.dev',
+  siteName: 'acme',
+  authProvider: async () => {
+    const token = await getStoredToken()
+    return `Bearer ${token}`
+  },
+})
+
+export function OrdersScreen() {
+  const [orders, setOrders] = useState<Array<{ name: string; status: string }>>([])
+
+  useEffect(() => {
+    let alive = true
+    kora.getList('Order', { limit: 20, orderBy: 'modified DESC' }).then((items) => {
+      if (alive) setOrders(items)
+    })
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  return null
+}
+```
+
+## Backend Service Usage
+
+```ts
+import { KoraClient } from '@kora/extension-sdk'
+
+const kora = new KoraClient({
+  baseUrl: process.env.KORA_BASE_URL!,
+  siteName: process.env.KORA_SITE_NAME!,
+  authProvider: () => `Bearer ${process.env.KORA_API_TOKEN!}`,
+})
+
+export async function syncInvoice(invoiceId: string) {
+  const invoice = await kora.getDoc('Invoice', invoiceId)
+  if (!invoice) {
+    throw new Error('Invoice not found')
+  }
+
+  await kora.callMethod('sync_invoice_to_erp', { invoiceId })
+}
+```
+
+## Supported Data Model Types
+
+The SDK exports structural types for the engine config model so app code can stay in sync with Kora:
+
+- `DocType`
+- `Field`
+- `Constraint`
+- `DocConstraint`
+- `PublicAccess`
+- `PublicFilter`
+- `View`
+- `ViewComponent`
+- `ViewAction`
+- `ViewRule`
+- `ViewCondition`
+- `ViewFilter`
+- `ViewPublicAccess`
+
+## Bulk Operations
+
+Bulk helpers are sequential fan-out over the standard document endpoints.
+They are designed for predictable behavior across UI and backend clients.
+
+```ts
+const results = await kora.bulkCreate([
+  { doctype: 'Feedback', doc: { title: 'A', rating: 5 } },
+  { doctype: 'Feedback', doc: { title: 'B', rating: 4 } },
+])
+
+for (const result of results) {
+  if (!result.success) {
+    console.error(result.index, result.error)
+  }
+}
+```
+
+## Custom UI Model
+
+For a custom Kora UI, these are the core concepts:
+
+- `SiteContext` for the connected site and auth settings
+- `DocType` for schema discovery
+- `Field` for field rendering and validation
+- `View` for layout and route structure
+- `Document` for loaded or edited record state
+- `Query` for list/search requests
+- `Workflow` for allowed state changes and actions
+- `FileRef` for uploaded media and attachments
+
+Typical flow:
+
+1. Call `listDoctypes()` or `getDoctype()` to discover schema.
+2. Call `listViews()` or `getView()` to find routes and layouts.
+3. Call `getDoc()` / `getList()` to load data.
+4. Render fields from the returned schema.
+5. Submit with `createDoc()` / `updateDoc()` / `submitAction()`.
+6. Use `uploadFile()` for image and attachment fields.
+
+## File Handling
+
+```ts
+const uploaded = await kora.uploadFile(file)
+const url = kora.getFileUrl(uploaded.path)
+```
+
+Use `uploadFile()` for image, audio, and attachment inputs. Use `getFileUrl()` when rendering previews or links.
+
+## Error Handling
+
+Requests throw `KoraError` when the server returns a non-2xx response.
+
+```ts
+try {
+  await kora.getDoc('Order', 'ORD-0001')
+} catch (err) {
+  if (err instanceof KoraError) {
+    console.error(err.status, err.message)
+  }
+}
+```
 
 ## Versioning
 
-This package follows [Semantic Versioning](https://semver.org/).
-
-| SDK Version | Kora Engine | Node.js |
-|---|---|---|
-| 0.x | >= 0.7.1-alpha | >= 20.0.0 |
+This package follows semantic versioning.
 
 ## License
 

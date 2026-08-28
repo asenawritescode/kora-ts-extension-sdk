@@ -2,10 +2,293 @@
 export interface KoraClientConfig {
   /** Base URL of the Kora site (e.g., https://myapp.kora.dev) */
   baseUrl: string
-  /** Bearer token for authentication */
-  token: string
+  /** Kora site name or hostname segment used in request paths. */
+  siteName: string
+  /** Bearer token for authentication, or an auth header provider. */
+  token?: string
+  /** Custom auth header value, overriding token when provided. */
+  authHeader?: string
+  /** Provide auth headers dynamically per request. */
+  authProvider?: () => Promise<string | undefined> | string | undefined
   /** Request timeout in ms (default: 30000) */
   timeout?: number
+  /** Optional custom fetch implementation for non-browser runtimes. */
+  fetch?: typeof fetch
+}
+
+/** High-level site context for a connected Kora instance. */
+export interface SiteContext {
+  baseUrl: string
+  siteName: string
+  authHeader?: string
+  timeout?: number
+}
+
+/** DocType definition mirrored from the Kora engine config model. */
+export interface DocType {
+  name: string
+  resource_name?: string
+  module: string
+  is_submittable: boolean
+  is_child_table: boolean
+  is_single: boolean
+  track_changes: boolean
+  title_field: string
+  search_fields: string
+  sort_field: string
+  sort_order: string
+  description: string
+  fields: Field[]
+  doc_constraints?: DocConstraint[]
+  public_access?: PublicAccess
+}
+
+/** Public-access configuration for a DocType. */
+export interface PublicAccess {
+  enabled: boolean
+  list: boolean
+  read: boolean
+  fields: string[]
+  filters: PublicFilter[]
+  sort_field: string
+  sort_order: string
+  max_limit: number
+  cache_max_age: number
+}
+
+/** Server-owned public filter. */
+export interface PublicFilter {
+  field: string
+  op: string
+  value: unknown
+}
+
+/** A document field definition. */
+export interface Field {
+  fieldname: string
+  fieldtype: string
+  label: string
+  options?: string
+  reqd?: boolean
+  unique?: boolean
+  default?: string
+  hidden?: boolean
+  read_only?: boolean
+  bold?: boolean
+  in_list_view?: boolean
+  in_standard_filter?: boolean
+  search_index?: boolean
+  description?: string
+  depends_on?: string
+  mandatory_depends_on?: string
+  constraints?: Constraint[]
+  renamed_from?: string
+  linked_field?: string
+  computed?: string
+  dependency_scope?: string
+  accept?: string
+}
+
+/** Field constraint definition. */
+export interface Constraint {
+  type: string
+  value?: unknown
+  values?: string[]
+  pattern?: string
+  message: string
+  condition?: string
+  scope?: string
+}
+
+/** Doc-level constraint definition. */
+export interface DocConstraint {
+  type: string
+  predicate: string
+  condition?: string
+  message: string
+}
+
+/** View definition mirrored from the Kora engine config model. */
+export interface View {
+  name: string
+  route: string
+  type: string
+  layout: string
+  label: string
+  module: string
+  source_doctype?: string
+  components: ViewComponent[]
+  public_access?: ViewPublicAccess
+}
+
+/** Component in a view tree. */
+export interface ViewComponent {
+  id: string
+  type: string
+  region: string
+  label?: string
+  source_doctype?: string
+  data?: string
+  bindings?: Record<string, string>
+  filters?: ViewFilter[]
+  actions?: ViewAction[]
+  rules?: ViewRule[]
+  components?: ViewComponent[]
+  desktop_columns?: string[]
+  mobile_columns?: string[]
+  position: number
+  span?: number
+}
+
+/** View action definition. */
+export interface ViewAction {
+  id: string
+  trigger: string
+  type: string
+  config?: Record<string, unknown>
+}
+
+/** View rule definition. */
+export interface ViewRule {
+  target: string
+  condition: ViewCondition
+}
+
+/** Structured condition for a view rule/filter. */
+export interface ViewCondition {
+  field: string
+  op: string
+  value: unknown
+}
+
+/** View filter definition. */
+export interface ViewFilter {
+  field: string
+  op: string
+  value: unknown
+}
+
+/** View public-access configuration. */
+export interface ViewPublicAccess {
+  enabled: boolean
+  components: string[]
+  allow_mutations: boolean
+}
+
+/** Generic document shape for UI and backend clients. */
+export interface Document<TFields = Record<string, unknown>, TChild = Record<string, unknown>> {
+  name?: string
+  doctype: string
+  owner?: string
+  creation?: string
+  modified?: string
+  modified_by?: string
+  doc_status?: number
+  idx?: number
+  fields: TFields
+  children?: Record<string, TChild[]>
+  attachments?: FileRef[]
+}
+
+/** Query options for document reads/searches. */
+export interface Query {
+  filters?: Record<string, unknown> | Array<[string, string, unknown]>
+  search?: string
+  fields?: string[]
+  limit?: number
+  offset?: number
+  orderBy?: string
+  groupBy?: string
+}
+
+/** Result wrapper for mutations. */
+export interface MutationResult<T = Record<string, unknown>> {
+  data?: T
+  warnings?: string[]
+  errors?: Array<{ field?: string; message: string; code?: string }>
+  workflow?: WorkflowResult
+}
+
+/** Bulk operation item input. */
+export interface BulkDocItem<T = Record<string, unknown>> {
+  doctype: string
+  name?: string
+  doc?: T
+}
+
+/** Bulk operation result per item. */
+export interface BulkDocResult<T = Record<string, unknown>> {
+  index: number
+  doctype: string
+  name?: string
+  success: boolean
+  data?: T
+  error?: string
+}
+
+/** Workflow definition model. */
+export interface Workflow {
+  name: string
+  doctype: string
+  states: WorkflowState[]
+  transitions: WorkflowTransition[]
+}
+
+export interface WorkflowState {
+  name: string
+  label?: string
+  is_default?: boolean
+  is_final?: boolean
+}
+
+export interface WorkflowTransition {
+  action: string
+  from: string
+  to: string
+  allowed_roles?: string[]
+}
+
+export interface WorkflowResult {
+  action?: string
+  from?: string
+  to?: string
+  triggered?: boolean
+}
+
+/** File reference returned by upload and attachment flows. */
+export interface FileRef {
+  path: string
+  filename: string
+  mimeType?: string
+  size?: number
+  url?: string
+}
+
+/** Common document response shape used by Kora APIs. */
+export interface DocumentEnvelope<T = Record<string, unknown>> {
+  data: T
+  meta?: Record<string, unknown>
+}
+
+/** Common list response shape used by Kora APIs. */
+export interface ListEnvelope<T = Record<string, unknown>> {
+  data: T[]
+  meta?: {
+    total?: number
+    doctype?: string
+    [key: string]: unknown
+  }
+}
+
+/** Query options for document list endpoints. */
+export interface ListQuery {
+  limit?: number
+  offset?: number
+  filters?: Record<string, unknown> | Array<[string, string, unknown]>
+  orderBy?: string
+  fields?: string[]
+  search?: string
+  groupBy?: string
 }
 
 /** Stored script record */
