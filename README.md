@@ -148,6 +148,27 @@ const bulkDeleted = await kora.bulkDelete([
 const result = await kora.callMethod('send_invoice', { orderId: 'ORD-0001' })
 ```
 
+`callMethod()` maps to the site API route:
+
+```text
+POST /s/:siteName/api/method/:name
+```
+
+For the call to succeed, the backend must already define an active `api_method` script with:
+
+- `method_path` set to the method name
+- the same `siteName` the client is configured with
+- a compiled, active script body
+
+Example:
+
+- `kora.callMethod('sync_invoice_to_erp', { invoiceId })`
+- sends `POST /s/acme/api/method/sync_invoice_to_erp`
+- executes the active script whose `script_type` is `api_method` and `method_path` is `sync_invoice_to_erp`
+- passes `{ invoiceId }` as the request body
+
+If the method is missing, inactive, or attached to a different site, the request fails with a not-found or authorization-style server error.
+
 ## Script Management
 
 ```ts
