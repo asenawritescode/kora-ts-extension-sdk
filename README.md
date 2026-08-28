@@ -113,6 +113,17 @@ POST /s/:siteName/api/method/:name
 
 For the method to succeed, the backend must already define an active `api_method` script with the same `method_path` on the same site. The request body is passed through as-is.
 
+### Server-Side Requirements
+
+To make a method callable from the SDK:
+
+- create a script with `script_type: api_method`
+- set `method_path` to the public method name
+- activate the script
+- ensure it is stored for the same site the client is configured with
+
+If any of those are missing, `callMethod()` will fail with a server error or a not-found response.
+
 ## Document CRUD
 
 ```ts
