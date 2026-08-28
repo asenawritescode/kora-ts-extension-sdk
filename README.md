@@ -105,6 +105,14 @@ All requests are site-scoped under:
 /s/:siteName/api/...
 ```
 
+`callMethod(name, body?)` is the generic server-method bridge. It sends a request to:
+
+```text
+POST /s/:siteName/api/method/:name
+```
+
+For the method to succeed, the backend must already define an active `api_method` script with the same `method_path` on the same site. The request body is passed through as-is.
+
 ## Document CRUD
 
 ```ts
