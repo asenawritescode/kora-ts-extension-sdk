@@ -17,6 +17,10 @@ It is useful for:
 - workflow automation
 - extension management
 
+## Architecture and contract migration
+
+The [architecture contract notes](docs/architecture-contracts.md) track the Engine-owned wire boundary. Generated Engine v2 wire types and runtime validators are exported from the SDK root with a development-snapshot base revision and artifact digest. Request/workflow transport methods are not exposed until the Engine endpoints and capability gates are implemented.
+
 ## Installation
 
 ```bash
@@ -351,6 +355,29 @@ try {
   }
 }
 ```
+
+## Human requests
+
+The SDK exposes the Engine v2 request contract with generated TypeScript types and runtime validation. The Engine currently enables subject-free direct user tasks for verified human tenant users; extension/service credentials, approvals, and subject-bound requests are denied until their domain policy is assembled.
+
+```ts
+import { KoraClient, type SubmitRequest } from '@kora/extension-sdk'
+
+const command: SubmitRequest = {
+  meta: { idempotency_key: crypto.randomUUID() },
+  kind: 'task',
+  title: 'Review this item',
+  message: 'Please complete the review.',
+  assignment: { mode: 'any', assignees: [{ kind: 'user', id: 'reviewer' }] },
+}
+
+const created = await kora.submitRequest(command)
+const inbox = await kora.listRequests({
+  page: { limit: 25 }, view: 'needs_action', overdue_only: false,
+})
+```
+
+The server derives requester identity from authentication, filters every inbox projection, and rechecks assignment eligibility and revision when recording a response. These methods require the Engine v2 request routes.
 
 ## Versioning
 

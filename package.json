@@ -11,20 +11,29 @@
       "types": "./dist/index.d.ts"
     }
   },
-  "files": ["dist", "README.md", "LICENSE"],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "bun test",
+    "check:contracts": "bun scripts/check-contract-bundle.ts",
     "lint": "neostandard",
     "lint:fix": "neostandard --fix",
     "prepublishOnly": "npm run build && npm run lint && npm test"
   },
-  "keywords": ["kora", "extension", "sdk", "low-code"],
+  "keywords": [
+    "kora",
+    "extension",
+    "sdk",
+    "low-code"
+  ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/asenawritescode/kora-website.git",
-    "directory": "packages/extension-sdk"
+    "url": "https://github.com/asenawritescode/kora-ts-extension-sdk.git"
   },
   "license": "MIT",
   "devDependencies": {
