@@ -127,6 +127,135 @@ describe('KoraClient', () => {
     expect(fetchSpy).toHaveBeenCalled()
   })
 
+  it('lists requests with the v2 actor-scoped filters and validates returned items', async () => {
+    const request = {
+      id: '01K7REQUEST00000000000000000', revision: '1', kind: 'task', status: 'pending', requester: 'alice',
+      title: 'Review order', message: 'Please review', allowed_responses: [], assignments: [],
+      created_at: '2026-10-14T12:00:00Z', updated_at: '2026-10-14T12:00:00Z',
+    }
+    const fetchSpy = mock(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      expect(url).toContain('/api/v2/requests?')
+      expect(url).toContain('view=needs_action')
+      expect(url).toContain('kind=task')
+      return new Response(JSON.stringify({ data: { items: [request], next_cursor: 'next' } }), { status: 200 })
+    })
+    globalThis.fetch = fetchSpy as unknown as typeof fetch
+    const client = new KoraClient({ baseUrl: 'https://myapp.kora.dev', siteName: 'demo' })
+    const page = await client.listRequests({ page: { limit: 10 }, view: 'needs_action', kind: 'task', overdue_only: false })
+    expect(page.items).toHaveLength(1)
+    expect(page.items[0]?.id).toBe(request.id)
+    expect(page.next_cursor).toBe('next')
+  })
+
+  it('uses Engine capability discovery and treats older navigation responses as unsupported', async () => {
+    const responses = [
+      { data: { capabilities_version: '2', supported_capabilities: ['requests.inbox.v2', 'workflow.orchestration.v2'] } },
+      { data: { user: { name: 'alice' } } },
+    ]
+    const calls: string[] = []
+    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+      calls.push(String(input))
+      return new Response(JSON.stringify(responses.shift()), { status: 200 })
+    }) as unknown as typeof fetch
+    const client = new KoraClient({ baseUrl: 'https://myapp.kora.dev', siteName: 'demo' })
+    expect(await client.getCapabilities()).toEqual({
+      version: '2', supported: ['requests.inbox.v2', 'workflow.orchestration.v2'],
+    })
+    expect(await client.getCapabilities()).toEqual({ version: undefined, supported: [] })
+    expect(calls.every((url) => url.includes('/api/v1/system/navigation'))).toBe(true)
+  })
+
+  it('submits typed v2 request commands and rejects invalid response contracts', async () => {
+    const request = {
+      id: '01K7REQUEST00000000000000000', revision: '1', kind: 'task', status: 'pending', requester: 'alice',
+      title: 'Review order', message: 'Please review', allowed_responses: [], assignments: [],
+      created_at: '2026-10-14T12:00:00Z', updated_at: '2026-10-14T12:00:00Z',
+    }
+    const fetchSpy = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toContain('/api/v2/requests')
+      expect(init?.method).toBe('POST')
+      expect(JSON.parse(String(init?.body)).kind).toBe('task')
+      return new Response(JSON.stringify({ data: request }), { status: 201 })
+    })
+    globalThis.fetch = fetchSpy as unknown as typeof fetch
+    const client = new KoraClient({ baseUrl: 'https://myapp.kora.dev', siteName: 'demo' })
+    const result = await client.submitRequest({
+      meta: { idempotency_key: 'submit-key' }, kind: 'task', title: 'Review order', message: 'Please review',
+      assignment: { mode: 'any', assignees: [{ kind: 'user', id: 'bob' }] },
+    })
+    expect(result.requester).toBe('alice')
+    await expect(client.submitRequest({ meta: { idempotency_key: 'bad' }, kind: 'task', title: '', message: '' } as never)).rejects.toThrow('Invalid Kora contract: SubmitRequest')
+  })
+
+  it('propagates AbortSignal cancellation to v2 request transport', async () => {
+    let startFetch!: () => void
+    const fetchStarted = new Promise<void>((resolve) => { startFetch = resolve })
+    let transportSignal: AbortSignal | null | undefined
+    globalThis.fetch = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      transportSignal = init?.signal
+      startFetch()
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true })
+      })
+    }) as unknown as typeof fetch
+
+    const client = new KoraClient({ baseUrl: 'https://myapp.kora.dev', siteName: 'demo' })
+    const caller = new AbortController()
+    const pending = client.listRequests(undefined, caller.signal)
+    await fetchStarted
+    caller.abort()
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+    expect(transportSignal?.aborted).toBe(true)
+  })
+
+  it('validates, publishes, starts, reads, reconciles, and cancels durable workflows with stable keys', async () => {
+    const definition = { id: 'approval', version: 1, entry: 'end', steps: [{ id: 'end', kind: 'end', end: { outcome: 'done' } }] }
+    const instance = {
+      id: '01K7INSTANCE0000000000000000', revision: '1', definition_id: 'approval', definition_version: 1,
+      subject: { kind: 'Purchase Request', id: 'PR-1', revision: '7' }, status: 'outcome_unknown',
+      current_step: 'action', created_at: '2026-10-14T12:00:00Z', updated_at: '2026-10-14T12:00:00Z',
+    }
+    const calls: Array<{ url: string; method?: string; headers?: HeadersInit }> = []
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      calls.push({ url, method: init?.method, headers: init?.headers })
+      if (url.endsWith('/workflow-definitions/validate')) return new Response(JSON.stringify({ data: { valid: true, issues: [] } }), { status: 200 })
+      if (url.endsWith('/workflow-definitions')) return new Response(JSON.stringify({ data: { definition_id: 'approval', version: 1, digest: 'a'.repeat(64) } }), { status: 201 })
+      return new Response(JSON.stringify({ data: instance }), { status: 200 })
+    }) as unknown as typeof fetch
+
+    const client = new KoraClient({ baseUrl: 'https://myapp.kora.dev', siteName: 'demo' })
+    expect(await client.validateWorkflowDefinition(definition)).toEqual({ valid: true, issues: [] })
+    expect((await client.publishWorkflowDefinition(definition, 'publish-key')).version).toBe(1)
+    expect((await client.startWorkflow({
+      meta: { idempotency_key: 'start-key' }, definition_id: 'approval', definition_version: 1,
+      subject: { kind: 'Purchase Request', id: 'PR-1', revision: '7' },
+    })).id).toBe(instance.id)
+    expect((await client.getWorkflowInstance(instance.id)).status).toBe('outcome_unknown')
+    expect((await client.reconcileWorkflow(instance.id, {
+      meta: { idempotency_key: 'reconcile-key', expected_revision: '1' }, step_id: 'action',
+      outcome: 'confirmed_not_applied', evidence_ref: 'ticket:42', reason: 'Provider confirmed no effect',
+    })).revision).toBe('1')
+    expect((await client.cancelWorkflow(instance.id, {
+      meta: { idempotency_key: 'cancel-key', expected_revision: '1' }, reason: 'No longer needed',
+    })).id).toBe(instance.id)
+
+    const writeCalls = calls.filter((call) => call.method === 'POST')
+    expect(writeCalls.map((call) => call.url)).toEqual([
+      expect.stringContaining('/api/v2/workflow-definitions/validate'),
+      expect.stringContaining('/api/v2/workflow-definitions'),
+      expect.stringContaining('/api/v2/workflow-instances'),
+      expect.stringContaining('/api/v2/workflow-instances/'),
+      expect.stringContaining('/api/v2/workflow-instances/'),
+    ])
+    expect(new Headers(writeCalls[1]?.headers).get('Idempotency-Key')).toBe('publish-key')
+    expect(new Headers(writeCalls[2]?.headers).get('Idempotency-Key')).toBe('start-key')
+    expect(new Headers(writeCalls[3]?.headers).get('Idempotency-Key')).toBe('reconcile-key')
+    expect(new Headers(writeCalls[4]?.headers).get('Idempotency-Key')).toBe('cancel-key')
+  })
+
   it('supports sequential bulk create operations', async () => {
     const calls: string[] = []
     const fetchSpy = mock(async (input: RequestInfo | URL, init?: RequestInit) => {

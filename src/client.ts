@@ -21,6 +21,27 @@ import type {
   BulkDocItem,
   BulkDocResult,
 } from './types.js'
+import {
+  decodeContract,
+  isContract,
+  type CancelRequest,
+  type PageRequest,
+  type ReassignRequest,
+  type RequestFilter,
+  type RequestHistoryEntry,
+  type RequestView,
+  type RespondRequest,
+  type ResponseDetail,
+  type ResponseReceipt,
+  type SubmitRequest,
+  type WorkflowDefinition,
+  type ValidationResult,
+  type DefinitionVersionRef,
+  type StartWorkflow,
+  type WorkflowInstance,
+  type ReconcileWorkflow,
+  type CancelWorkflow,
+} from './generated/engine-v2.js'
 
 export class KoraClient {
   readonly #config: {
@@ -88,6 +109,125 @@ export class KoraClient {
   async getWorkflow (doctype: string): Promise<Workflow> {
     const res = await this.#request<{ data: Workflow }>('GET', `/api/system/workflows/${encodeURIComponent(doctype)}`)
     return res.data
+  }
+
+  /** Read server-advertised optional features. Older Engines return an empty capability list. */
+  async getCapabilities (signal?: AbortSignal): Promise<{ version?: string; supported: string[] }> {
+    const response = await this.#request<{ data: unknown }>('GET', '/api/v1/system/navigation', undefined, signal)
+    if (!response.data || typeof response.data !== 'object' || Array.isArray(response.data)) {
+      throw new TypeError('Invalid Kora capability response')
+    }
+    const navigation = response.data as { capabilities_version?: unknown; supported_capabilities?: unknown }
+    const supported = navigation.supported_capabilities
+    if (supported === undefined) return { version: typeof navigation.capabilities_version === 'string' ? navigation.capabilities_version : undefined, supported: [] }
+    if (!Array.isArray(supported) || !supported.every((value) => typeof value === 'string')) {
+      throw new TypeError('Invalid Kora capability response')
+    }
+    return {
+      version: typeof navigation.capabilities_version === 'string' ? navigation.capabilities_version : undefined,
+      supported,
+    }
+  }
+
+  /** List the actor-scoped v2 request inbox. The server applies visibility and assignment rules. */
+  async listRequests (filter: RequestFilter = { page: { limit: 25 }, view: 'needs_action', overdue_only: false }, signal?: AbortSignal): Promise<{ items: RequestView[]; next_cursor?: string }> {
+    const page = filter.page
+    const params = new URLSearchParams({ view: filter.view, limit: String(page.limit), overdue_only: String(filter.overdue_only) })
+    if (page.cursor) params.set('cursor', page.cursor)
+    if (filter.kind) params.set('kind', filter.kind)
+    const response = await this.#request<{ data: unknown }>('GET', `/api/v2/requests?${params.toString()}`, undefined, signal)
+    if (!isRequestPage(response.data, 'RequestView')) throw new TypeError('Invalid Kora contract: Page<RequestView>')
+    return response.data as { items: RequestView[]; next_cursor?: string }
+  }
+
+  /** Read one request after the server verifies participant visibility. */
+  async getRequest (id: string, signal?: AbortSignal): Promise<RequestView> {
+    const response = await this.#request<{ data: unknown }>('GET', `/api/v2/requests/${encodeURIComponent(id)}`, undefined, signal)
+    return decodeContract<RequestView>('RequestView', response.data)
+  }
+
+  /** Submit a request using the authenticated actor; requester identity is never supplied by the client. */
+  async submitRequest (command: SubmitRequest, signal?: AbortSignal): Promise<RequestView> {
+    decodeContract<SubmitRequest>('SubmitRequest', command)
+    const response = await this.#request<{ data: unknown }>('POST', '/api/v2/requests', command, signal)
+    return decodeContract<RequestView>('RequestView', response.data)
+  }
+
+  /** Record a response. The Engine rechecks current assignment eligibility and revision. */
+  async respondToRequest (id: string, command: RespondRequest, signal?: AbortSignal): Promise<ResponseReceipt> {
+    decodeContract<RespondRequest>('RespondRequest', command)
+    const response = await this.#request<{ data: unknown }>('POST', `/api/v2/requests/${encodeURIComponent(id)}/responses`, command, signal)
+    return decodeContract<ResponseReceipt>('ResponseReceipt', response.data)
+  }
+
+  async reassignRequest (id: string, command: ReassignRequest, signal?: AbortSignal): Promise<RequestView> {
+    decodeContract<ReassignRequest>('ReassignRequest', command)
+    const response = await this.#request<{ data: unknown }>('POST', `/api/v2/requests/${encodeURIComponent(id)}/reassignments`, command, signal)
+    return decodeContract<RequestView>('RequestView', response.data)
+  }
+
+  async cancelRequest (id: string, command: CancelRequest, signal?: AbortSignal): Promise<RequestView> {
+    decodeContract<CancelRequest>('CancelRequest', command)
+    const response = await this.#request<{ data: unknown }>('POST', `/api/v2/requests/${encodeURIComponent(id)}/cancel`, command, signal)
+    return decodeContract<RequestView>('RequestView', response.data)
+  }
+
+  async getRequestHistory (id: string, page: PageRequest = { limit: 25 }, signal?: AbortSignal): Promise<{ items: RequestHistoryEntry[]; next_cursor?: string }> {
+    const params = new URLSearchParams({ limit: String(page.limit) })
+    if (page.cursor) params.set('cursor', page.cursor)
+    const response = await this.#request<{ data: unknown }>('GET', `/api/v2/requests/${encodeURIComponent(id)}/history?${params.toString()}`, undefined, signal)
+    if (!isRequestPage(response.data, 'RequestHistoryEntry')) throw new TypeError('Invalid Kora contract: Page<RequestHistoryEntry>')
+    return response.data as { items: RequestHistoryEntry[]; next_cursor?: string }
+  }
+
+  async getRequestResponse (id: string, decisionId: string, signal?: AbortSignal): Promise<ResponseDetail> {
+    const response = await this.#request<{ data: unknown }>('GET', `/api/v2/requests/${encodeURIComponent(id)}/responses/${encodeURIComponent(decisionId)}`, undefined, signal)
+    return decodeContract<ResponseDetail>('ResponseDetail', response.data)
+  }
+
+  async markRequestRead (id: string, signal?: AbortSignal): Promise<void> {
+    await this.#request('POST', `/api/v2/requests/${encodeURIComponent(id)}/read`, undefined, signal)
+  }
+
+  /** Validate a durable process definition without publishing a version. */
+  async validateWorkflowDefinition (definition: WorkflowDefinition, signal?: AbortSignal): Promise<ValidationResult> {
+    decodeContract<WorkflowDefinition>('WorkflowDefinition', definition)
+    const response = await this.#request<{ data: unknown }>('POST', '/api/v2/workflow-definitions/validate', definition, signal)
+    return decodeContract<ValidationResult>('ValidationResult', response.data)
+  }
+
+  /** Publish an immutable workflow definition version using a caller-stable idempotency key. */
+  async publishWorkflowDefinition (definition: WorkflowDefinition, idempotencyKey: string, signal?: AbortSignal): Promise<DefinitionVersionRef> {
+    decodeContract<WorkflowDefinition>('WorkflowDefinition', definition)
+    const response = await this.#request<{ data: unknown }>('POST', '/api/v2/workflow-definitions', definition, signal, { 'Idempotency-Key': idempotencyKey })
+    return decodeContract<DefinitionVersionRef>('DefinitionVersionRef', response.data)
+  }
+
+  /** Start a durable workflow instance; the Engine derives actor identity from the authenticated request. */
+  async startWorkflow (command: StartWorkflow, signal?: AbortSignal): Promise<WorkflowInstance> {
+    decodeContract<StartWorkflow>('StartWorkflow', command)
+    const response = await this.#request<{ data: unknown }>('POST', '/api/v2/workflow-instances', command, signal, { 'Idempotency-Key': command.meta.idempotency_key })
+    return decodeContract<WorkflowInstance>('WorkflowInstance', response.data)
+  }
+
+  /** Read an instance visible to the authenticated execution identity. */
+  async getWorkflowInstance (id: string, signal?: AbortSignal): Promise<WorkflowInstance> {
+    const response = await this.#request<{ data: unknown }>('GET', `/api/v2/workflow-instances/${encodeURIComponent(id)}`, undefined, signal)
+    return decodeContract<WorkflowInstance>('WorkflowInstance', response.data)
+  }
+
+  /** Reconcile an uncertain external action with explicit evidence and a stable idempotency key. */
+  async reconcileWorkflow (id: string, command: ReconcileWorkflow, signal?: AbortSignal): Promise<WorkflowInstance> {
+    decodeContract<ReconcileWorkflow>('ReconcileWorkflow', command)
+    const response = await this.#request<{ data: unknown }>('POST', `/api/v2/workflow-instances/${encodeURIComponent(id)}/reconcile`, command, signal, { 'Idempotency-Key': command.meta.idempotency_key })
+    return decodeContract<WorkflowInstance>('WorkflowInstance', response.data)
+  }
+
+  /** Cancel a durable workflow instance with a revision-bound command. */
+  async cancelWorkflow (id: string, command: CancelWorkflow, signal?: AbortSignal): Promise<WorkflowInstance> {
+    decodeContract<CancelWorkflow>('CancelWorkflow', command)
+    const response = await this.#request<{ data: unknown }>('POST', `/api/v2/workflow-instances/${encodeURIComponent(id)}/cancel`, command, signal, { 'Idempotency-Key': command.meta.idempotency_key })
+    return decodeContract<WorkflowInstance>('WorkflowInstance', response.data)
   }
 
   /** Trigger a workflow action or submit a generic mutation payload. */
@@ -297,16 +437,20 @@ export class KoraClient {
 
   // ━━ Internal ━━
 
-  async #request<T> (method: string, path: string, body?: unknown): Promise<T> {
+  async #request<T> (method: string, path: string, body?: unknown, signal?: AbortSignal, extraHeaders: Record<string, string> = {}): Promise<T> {
     const url = `${this.#basePath()}${path}`
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      ...extraHeaders,
     }
     const authHeader = await this.#resolveAuthHeader()
     if (authHeader) headers.Authorization = authHeader
 
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), this.#config.timeout)
+    const relayAbort = () => controller.abort(signal?.reason)
+    if (signal?.aborted) relayAbort()
+    else signal?.addEventListener('abort', relayAbort, { once: true })
 
     try {
       const response = await this.#fetchImpl(url, {
@@ -326,6 +470,7 @@ export class KoraClient {
       return data as T
     } finally {
       clearTimeout(timer)
+      signal?.removeEventListener('abort', relayAbort)
     }
   }
 
@@ -381,4 +526,11 @@ export class KoraError extends Error {
     this.status = status
     this.detail = detail
   }
+}
+
+function isRequestPage (value: unknown, itemType: 'RequestView' | 'RequestHistoryEntry'): boolean {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
+  const page = value as { items?: unknown; next_cursor?: unknown }
+  return Array.isArray(page.items) && page.items.every(item => isContract(itemType, item)) &&
+    (page.next_cursor === undefined || typeof page.next_cursor === 'string')
 }
