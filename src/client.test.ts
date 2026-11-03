@@ -90,7 +90,7 @@ describe('KoraClient', () => {
     const commandOutputRef = { id: 'billing.issue.output', version: 1 }
     const catalog = {
       revision: 9, business_scope: scope, modules: [], allowed_entity_choices: [scope], available_scopes: [scope], blockers: [],
-      published_queries: [{ owner_module_id: 'sales.orders', name: 'open', route: '/api/v1/modules/sales.orders/queries/open', input_schema: inputRef, output_schema: rowsRef, scope_policy: 'entity_owned', allowed_fields: ['ref'], page_limit: 50, presentation: {} }],
+      published_queries: [{ owner_module_id: 'sales.orders', name: 'open', capability: 'sales.read', route: '/api/v1/modules/sales.orders/queries/open', input_schema: inputRef, output_schema: rowsRef, scope_policy: 'entity_owned', allowed_fields: ['ref'], page_limit: 50, presentation: {} }],
       published_projections: [{ owner_module_id: 'sales.ar', id: 'balance', route: '/api/v1/modules/sales.ar/projections/balance', output_schema: rowsRef, scope_policy: 'entity_owned', allowed_fields: ['ref'] }],
       published_operations: [{ owner_module_id: 'billing.invoices', operation_ref: 'billing.invoices~billing.invoice~issue', operation: 'issue', capability: 'billing.invoice', availability: 'available', input_schema: commandInputRef, output_schema: commandOutputRef, permissions: ['issue'], presentation: {} }],
       schemas: [
