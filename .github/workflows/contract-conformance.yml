@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: asenawritescode/kora
-          ref: 91f836bfd04d5a494d23b16f4d5250ce95251e41
+          ref: 81f3da384c2ea60d3b8fd87549a94a3720292bc3
           path: engine
       - run: bun install --frozen-lockfile
       - run: bun run check:contracts
