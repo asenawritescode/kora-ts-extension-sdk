@@ -1,21 +1,12 @@
 # @kora/extension-sdk
 
-Generic TypeScript SDK for the Kora engine.
+TypeScript SDK for extension clients using Kora's published, actor-scoped contracts.
 
-This package is intentionally generic:
+The SDK:
 
-- it does not know about CMS-specific public content flows
-- it does not depend on any UI framework
-- it can be used from web apps, React Native, Node services, scripts, and internal tooling
-
-It is useful for:
-
-- custom API clients
-- internal backend services
-- React or React Native apps
-- script-driven integrations
-- workflow automation
-- extension management
+- does not depend on a UI framework
+- can be used by extension hosts, Node services and scripts
+- transports scope and credentials while Engine owns authorization, provider selection and business invariants
 
 ## Architecture and contract migration
 
@@ -29,40 +20,7 @@ npm install @kora/extension-sdk
 
 ## What It Can Do
 
-The client exposes:
-
-- `callMethod(name, body?)`
-- `getSupportingRecord(doctype, name)`
-- `listSupportingRecords(doctype, query?)`
-- `createSupportingRecord(doctype, doc)`
-- `updateSupportingRecord(doctype, name, doc)`
-- `deleteSupportingRecord(doctype, name)`
-- `bulkCreateSupportingRecords(items)`
-- `bulkUpdateSupportingRecords(items)`
-- `bulkDeleteSupportingRecords(items)`
-- script management
-- extension/webhook management
-- execution log access
-
-It also exports engine-aligned config types for:
-
-- `DocType`
-- `SiteContext`
-- `Field`
-- `View`
-- `ViewComponent`
-- `ViewAction`
-- `ViewRule`
-- `ViewFilter`
-- `ViewPublicAccess`
-- `PublicAccess`
-- `Document`
-- `Query`
-- `MutationResult`
-- `BulkDocItem`
-- `BulkDocResult`
-- `Workflow`
-- `FileRef`
+The extension surface exposes immutable business scopes, the actor-filtered catalog, published queries/projections, published domain operations, execution receipts and lookup by the original operation/idempotency key. Supporting-record CRUD helpers remain available only where Engine explicitly permits them; they do not grant access to module-owned business resources.
 
 ## Configuration
 
@@ -72,61 +30,11 @@ import { KoraClient } from '@kora/extension-sdk'
 const kora = new KoraClient({
   baseUrl: 'https://myapp.kora.dev',
   siteName: 'acme',
-  token: 'kxt_your_token',
-})
-```
-
-Supported auth patterns:
-
-```ts
-// Bearer token
-new KoraClient({
-  baseUrl: 'https://myapp.kora.dev',
-  siteName: 'acme',
-  token: 'kxt_your_token',
-})
-
-// Explicit auth header
-new KoraClient({
-  baseUrl: 'https://myapp.kora.dev',
-  siteName: 'acme',
-  authHeader: 'Bearer kxt_your_token',
-})
-
-// Dynamic auth provider
-new KoraClient({
-  baseUrl: 'https://myapp.kora.dev',
-  siteName: 'acme',
-  authProvider: async () => `Bearer ${await getTokenSomehow()}`,
+  authProvider: async () => `Bearer ${await getExtensionTokenFromSecretStore()}`,
 })
 ```
 
 You can also inject a custom `fetch` implementation for environments that do not expose a global `fetch`.
-
-All requests are site-scoped under:
-
-```text
-/s/:siteName/api/...
-```
-
-`callMethod(name, body?)` is the generic server-method bridge. It sends a request to:
-
-```text
-POST /s/:siteName/api/method/:name
-```
-
-For the method to succeed, the backend must already define an active `api_method` script with the same `method_path` on the same site. The request body is passed through as-is.
-
-### Server-Side Requirements
-
-To make a method callable from the SDK:
-
-- create a script with `script_type: api_method`
-- set `method_path` to the public method name
-- activate the script
-- ensure it is stored for the same site the client is configured with
-
-If any of those are missing, `callMethod()` will fail with a server error or a not-found response.
 
 ## Supporting-record CRUD
 
@@ -165,182 +73,6 @@ const bulkUpdated = await kora.bulkUpdateSupportingRecords([
 const bulkDeleted = await kora.bulkDeleteSupportingRecords([
   { doctype: 'Feedback', name: 'FDB-0002' },
 ])
-```
-
-## Extension API Method Calls
-
-`callMethod()` is for site-owned extension APIs that do not replace a protected business operation. Domain changes must use the published operation API above.
-
-```ts
-const result = await kora.callMethod('rebuild_extension_search_index', { index: 'help' })
-```
-
-`callMethod()` maps to the site API route:
-
-```text
-POST /s/:siteName/api/method/:name
-```
-
-For the call to succeed, the backend must already define an active `api_method` script with:
-
-- `method_path` set to the method name
-- the same `siteName` the client is configured with
-- a compiled, active script body
-
-Example:
-
-- `kora.callMethod('rebuild_extension_search_index', { index: 'help' })`
-- sends `POST /s/acme/api/method/rebuild_extension_search_index`
-- executes the active extension-owned script with that method path
-- passes `{ index: 'help' }` as the request body
-
-If the method is missing, inactive, or attached to a different site, the request fails with a not-found or authorization-style server error.
-
-## Script Management
-
-```ts
-await kora.createScript({
-  name: 'validate_order',
-  script_type: 'doc_event',
-  doctype: 'Order',
-  event: 'before_save',
-  script: `
-    if (!event.doc.total || event.doc.total <= 0) {
-      throw new Error('Total must be greater than zero')
-    }
-  `,
-})
-```
-
-## Extension Management
-
-```ts
-const extension = await kora.createExtension({
-  name: 'warehouse_webhook',
-  display_name: 'Warehouse Webhook',
-  endpoint_url: 'https://hooks.example.com/kora',
-  subscriptions: ['after_insert:Delivery'],
-  api_permissions: ['read'],
-})
-```
-
-## React Native Usage
-
-The SDK is suitable for React Native because it is not tied to browser APIs.
-
-```ts
-import { useEffect, useState } from 'react'
-import { KoraClient } from '@kora/extension-sdk'
-
-const kora = new KoraClient({
-  baseUrl: 'https://myapp.kora.dev',
-  siteName: 'acme',
-  authProvider: async () => {
-    const token = await getStoredToken()
-    return `Bearer ${token}`
-  },
-})
-
-export function OrdersScreen() {
-  const [orders, setOrders] = useState<Array<{ name: string; status: string }>>([])
-
-  useEffect(() => {
-    let alive = true
-    kora.listSupportingRecords('Order', { limit: 20, orderBy: 'modified DESC' }).then((items) => {
-      if (alive) setOrders(items)
-    })
-    return () => {
-      alive = false
-    }
-  }, [])
-
-  return null
-}
-```
-
-## Backend Service Usage
-
-```ts
-import { KoraClient } from '@kora/extension-sdk'
-
-const kora = new KoraClient({
-  baseUrl: process.env.KORA_BASE_URL!,
-  siteName: process.env.KORA_SITE_NAME!,
-  authProvider: () => `Bearer ${process.env.KORA_API_TOKEN!}`,
-})
-
-export async function syncInvoice(invoiceId: string) {
-  const scoped = kora.withScope({ tenant_id: process.env.KORA_TENANT_ID!, kind: 'tenant' })
-  const catalog = await scoped.catalog()
-  const query = catalog.published_queries.find(item => item.name === 'invoice_by_id')
-  if (!query) throw new Error('Invoice lookup is not published')
-  return scoped.queryPublished(catalog, query.owner_module_id, query.name, { input: { invoice_id: invoiceId } })
-}
-```
-
-## Supported Data Model Types
-
-The SDK exports structural types for the engine config model so app code can stay in sync with Kora:
-
-- `DocType`
-- `Field`
-- `Constraint`
-- `DocConstraint`
-- `PublicAccess`
-- `PublicFilter`
-- `View`
-- `ViewComponent`
-- `ViewAction`
-- `ViewRule`
-- `ViewCondition`
-- `ViewFilter`
-- `ViewPublicAccess`
-
-## Supporting-record Bulk Helpers
-
-Bulk helpers are sequential fan-out over the supporting-record endpoints.
-Do not use them to implement a business transaction; publish and execute a domain operation instead.
-
-```ts
-const results = await kora.bulkCreateSupportingRecords([
-  { doctype: 'Feedback', doc: { title: 'A', rating: 5 } },
-  { doctype: 'Feedback', doc: { title: 'B', rating: 4 } },
-])
-
-for (const result of results) {
-  if (!result.success) {
-    console.error(result.index, result.error)
-  }
-}
-```
-
-## Custom UI Model
-
-For a custom Kora UI, these are the core concepts:
-
-- `SiteContext` for the connected site and auth settings
-- `DocType` for schema discovery
-- `Field` for field rendering and validation
-- `View` for layout and route structure
-- `Document` for loaded or edited record state
-- `Query` for list/search requests
-- `Workflow` for allowed state changes and actions
-- `FileRef` for uploaded media and attachments
-
-Typical flow:
-
-1. Call `listDoctypes()` or `getDoctype()` to discover schema.
-2. Call `listViews()` or `getView()` to find routes and layouts.
-3. Call `getSupportingRecord()` / `listSupportingRecords()` to load data.
-4. Render fields from the returned schema.
-5. Use a published domain operation for owned business changes; use supporting-record methods only where the Engine permits CRUD.
-6. Use `uploadFile()` for image and attachment fields.
-
-## File Handling
-
-```ts
-const uploaded = await kora.uploadFile(file)
-const url = kora.getFileUrl(uploaded.path)
 ```
 
 Use `uploadFile()` for image, audio, and attachment inputs. Use `getFileUrl()` when rendering previews or links.

@@ -23,5 +23,5 @@ jobs:
           KORA_ENGINE_ROOT: ${{ github.workspace }}/engine
       - run: bun test src/client.test.ts src/contract-fixtures.test.ts src/generated/engine-v2.test.ts
       - run: bun run build
-      - run: bun run lint src/client.ts src/types.ts src/index.ts src/validation.ts src/client.test.ts src/contract-fixtures.test.ts src/generated/engine-v2.test.ts
+      - run: bun run lint src/client.ts src/types.ts src/index.ts src/validation.ts src/schema-validation.ts src/client.test.ts src/contract-fixtures.test.ts src/generated/engine-v2.test.ts
       - run: bun run check:example
