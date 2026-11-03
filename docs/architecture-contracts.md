@@ -1,29 +1,27 @@
 # SDK contract architecture
 
-Date: 2026-10-16
-Status: Engine v2 request/workflow contracts and runtime validators are vendored, root-exported and verified against the clean Engine contract at commit `f939ad94d409d3f74d21a07246485abd2d9027f2` (artifact SHA-256 `1d0fc0cdb31433db902591ccb2c2a1e251da88be898708e40e164dce6670be3f`). Typed request and durable workflow transport methods validate decoded responses. The SDK source remains an unreleased working-tree change; no npm package has been published.
+Status: generated contracts and scoped transport are pinned to Engine commit `689e757f3e29321cb85ca55edb9d67d63ddfcb82` (TypeScript SHA-256 `28087aa21a4f05abc46b3529aa8248741dcdb1c6f745f6c17d0221f03a7ed1dc`; schema SHA-256 `3a5ebfe44690309b17a0935773def3243dde3f2ae216895d565651dcf45d5249`). CI compares the SDK bytes with that exact Engine revision.
 
-The Engine [target-state specification](../../kora/docs/architecture/target-state-spec.md) owns the wire models and compatibility policy. Hosted source path: [Engine specification](https://github.com/asenawritescode/kora/blob/main/docs/architecture/target-state-spec.md); pin the release commit.
+## Responsibility boundary
 
-## Boundary
+The SDK transports the actor's requests and strictly decodes Engine contracts. Engine owns authorization, business scope verification, operation ownership, provider selection, and business invariants. A selected provider or module execution grant never comes from caller input.
 
-`@kora/extension-sdk` implements transport, cancellation and runtime response validation. It does not decide authorization, approval eligibility, workflow progress or domain invariants. It remains framework-independent.
+## Scoped published client
 
-## G8 source changes
+`KoraClient.withScope(scope)` returns an immutable client carrying one canonical tenant or legal-entity scope. Legal-entity requests include `X-Kora-Legal-Entity-ID`; a request body that specifies a different `business_scope` is rejected before transmission. Auth provider, site routing, cancellation and timeout behavior remain request-local.
 
-- Completed locally: vendor the Engine-generated v2 DTOs and runtime validators in `src/generated/`; `src/generated/manifest.ts` pins clean Engine commit `f939ad94d409d3f74d21a07246485abd2d9027f2` and the artifact SHA-256. `bun run check:contracts` rejects local artifact drift. The generated contract is merged in Engine; SDK publication is still gated.
-- Completed: re-export the generated v2 wire types and validators from the SDK root while retaining existing v1/local abstractions. Tests cover bounded request DTOs, strict workflow step discriminators, finite response-routing keys and the data-minimal workflow event projection.
-- Generated decoders now run at request and durable workflow response boundaries. `getCapabilities()` reads Engine navigation, returns an empty list for older servers with no capability projection, and lets consumers check `workflow.orchestration.v2` and `requests.inbox.v2` before exposing those methods.
-- Typed request and workflow methods in `src/client.ts` accept optional `AbortSignal`; mutating workflow methods forward stable idempotency keys and preserve the client's timeout.
-- Tests cover routes, envelopes, cancellation, stable workflow idempotency headers and malformed contracts. Prior-version Engine compatibility and release checks remain open.
-- Correct stale repository metadata in `package.json` when releasing this migration.
+Read the actor-filtered application catalog, then use the exact published query or projection route and schema document. Query results retain cursor, snapshot, source revision, time and freshness metadata. A stale or incomplete result remains visibly stale or incomplete.
 
-Keep generic record operations schema-bound. Fixed approval commands must not become `Record<string, unknown>`. Never add an unrestricted `granted_by` or tenant identity override to a browser command. Information responses use a registered schema/version and bounded JSON payload.
+Submit published operations with a caller-created stable idempotency key and the catalog's exact input schema reference. A timeout remains uncertain; the SDK does not retry automatically or invent a receipt. Use execution lookup by ID or operation/key to recover the server receipt. Completed output is decoded against its published output schema.
 
-Retain current unversioned and v1 methods through the compatibility window. Wrappers call the same transport/domain boundary; they do not duplicate policy. Do not publish breaking aliases under the existing SDK version.
+Internal and external providers share the same operation and receipt types. The SDK does not expose provider selection as a client option.
 
-## Release gates
+## Supporting records
 
-Pin the Engine contract release, generate reproducibly, compare fixture manifest, run `bun run check:contracts`, `bun run test`, `bun run build`, and `bun run lint`, then test against current and prior compatible Engine versions. Release the SDK before upgrading UI consumers. New clients use capability discovery when connected to older servers. This bundle contains wire contracts only; it does not claim that a server currently supports request/workflow endpoints.
+`getSupportingRecord`, `listSupportingRecords`, `createSupportingRecord`, `updateSupportingRecord`, `deleteSupportingRecord`, and the bulk supporting-record helpers are for resources whose Engine policy allows ordinary CRUD. They are not a fallback for module-owned business resources. Bulk helpers fan out sequentially and do not form a business transaction.
 
-Local release-candidate check on 2026-10-16: `npm run prepublishOnly` passed (build, lint, 29 tests/99 assertions); `npm pack` produced `@kora/extension-sdk@0.1.0` (36.2 kB), and offline installation into `/dev/shm/kora-sdk-consumer` passed. A Node runtime check confirmed the installed package exports the merged Engine source revision and accepts a lowercase 64-character revocation fingerprint while rejecting uppercase input. The public npm registry returns E404 for this package, and `npm whoami` returns ENEEDAUTH. The SDK working tree is also uncommitted. Publish only from an authorized clean SDK release after selecting/reviewing its version and the coordinated consumer order, then retain prior-compatible behavior for the specified window.
+`callMethod` remains for active extension-owned APIs outside protected domain operations. Workflow and human-request APIs use generated v2 DTOs, strict response validation, cancellation and stable idempotency keys for writes.
+
+## Validation
+
+Run `bun run check:contracts`, `bun test`, `bun run build`, and `bun run lint`. Contract fixtures are shared with Engine and other first-party consumers. The bundle drift check reads the Engine source checkout pinned in the CI workflow; local agreement between the SDK files and manifest alone is insufficient.

@@ -32,14 +32,14 @@ npm install @kora/extension-sdk
 The client exposes:
 
 - `callMethod(name, body?)`
-- `getDoc(doctype, name)`
-- `getList(doctype, query?)`
-- `createDoc(doctype, doc)`
-- `updateDoc(doctype, name, doc)`
-- `deleteDoc(doctype, name)`
-- `bulkCreate(items)`
-- `bulkUpdate(items)`
-- `bulkDelete(items)`
+- `getSupportingRecord(doctype, name)`
+- `listSupportingRecords(doctype, query?)`
+- `createSupportingRecord(doctype, doc)`
+- `updateSupportingRecord(doctype, name, doc)`
+- `deleteSupportingRecord(doctype, name)`
+- `bulkCreateSupportingRecords(items)`
+- `bulkUpdateSupportingRecords(items)`
+- `bulkDeleteSupportingRecords(items)`
 - script management
 - extension/webhook management
 - execution log access
@@ -128,47 +128,51 @@ To make a method callable from the SDK:
 
 If any of those are missing, `callMethod()` will fail with a server error or a not-found response.
 
-## Document CRUD
+## Supporting-record CRUD
+
+These methods are only for explicitly permitted supporting records. Module-owned business resources must be read through published queries/projections and changed through owner-published operations. Bulk helpers make sequential requests; they are neither atomic nor a substitute for a domain operation.
 
 ```ts
-const customer = await kora.getDoc<{ name: string; email: string }>('Customer', 'CUST-0001')
+const customer = await kora.getSupportingRecord<{ name: string; email: string }>('Customer', 'CUST-0001')
 
-const customers = await kora.getList<{ name: string; full_name: string }>('Customer', {
+const customers = await kora.listSupportingRecords<{ name: string; full_name: string }>('Customer', {
   limit: 20,
   offset: 0,
   filters: [['status', '=', 'Active']],
   orderBy: 'modified DESC',
 })
 
-await kora.createDoc('Feedback', {
+await kora.createSupportingRecord('Feedback', {
   title: 'Great product',
   rating: 5,
 })
 
-await kora.updateDoc('Feedback', 'FDB-0001', {
+await kora.updateSupportingRecord('Feedback', 'FDB-0001', {
   rating: 4,
 })
 
-await kora.deleteDoc('Feedback', 'FDB-0001')
+await kora.deleteSupportingRecord('Feedback', 'FDB-0001')
 
-const bulkCreated = await kora.bulkCreate([
+const bulkCreated = await kora.bulkCreateSupportingRecords([
   { doctype: 'Feedback', doc: { title: 'Great product', rating: 5 } },
   { doctype: 'Feedback', doc: { title: 'Needs work', rating: 2 } },
 ])
 
-const bulkUpdated = await kora.bulkUpdate([
+const bulkUpdated = await kora.bulkUpdateSupportingRecords([
   { doctype: 'Feedback', name: 'FDB-0001', doc: { rating: 4 } },
 ])
 
-const bulkDeleted = await kora.bulkDelete([
+const bulkDeleted = await kora.bulkDeleteSupportingRecords([
   { doctype: 'Feedback', name: 'FDB-0002' },
 ])
 ```
 
-## Generic API Method Calls
+## Extension API Method Calls
+
+`callMethod()` is for site-owned extension APIs that do not replace a protected business operation. Domain changes must use the published operation API above.
 
 ```ts
-const result = await kora.callMethod('send_invoice', { orderId: 'ORD-0001' })
+const result = await kora.callMethod('rebuild_extension_search_index', { index: 'help' })
 ```
 
 `callMethod()` maps to the site API route:
@@ -185,10 +189,10 @@ For the call to succeed, the backend must already define an active `api_method` 
 
 Example:
 
-- `kora.callMethod('sync_invoice_to_erp', { invoiceId })`
-- sends `POST /s/acme/api/method/sync_invoice_to_erp`
-- executes the active script whose `script_type` is `api_method` and `method_path` is `sync_invoice_to_erp`
-- passes `{ invoiceId }` as the request body
+- `kora.callMethod('rebuild_extension_search_index', { index: 'help' })`
+- sends `POST /s/acme/api/method/rebuild_extension_search_index`
+- executes the active extension-owned script with that method path
+- passes `{ index: 'help' }` as the request body
 
 If the method is missing, inactive, or attached to a different site, the request fails with a not-found or authorization-style server error.
 
@@ -242,7 +246,7 @@ export function OrdersScreen() {
 
   useEffect(() => {
     let alive = true
-    kora.getList('Order', { limit: 20, orderBy: 'modified DESC' }).then((items) => {
+    kora.listSupportingRecords('Order', { limit: 20, orderBy: 'modified DESC' }).then((items) => {
       if (alive) setOrders(items)
     })
     return () => {
@@ -266,12 +270,11 @@ const kora = new KoraClient({
 })
 
 export async function syncInvoice(invoiceId: string) {
-  const invoice = await kora.getDoc('Invoice', invoiceId)
-  if (!invoice) {
-    throw new Error('Invoice not found')
-  }
-
-  await kora.callMethod('sync_invoice_to_erp', { invoiceId })
+  const scoped = kora.withScope({ tenant_id: process.env.KORA_TENANT_ID!, kind: 'tenant' })
+  const catalog = await scoped.catalog()
+  const query = catalog.published_queries.find(item => item.name === 'invoice_by_id')
+  if (!query) throw new Error('Invoice lookup is not published')
+  return scoped.queryPublished(catalog, query.owner_module_id, query.name, { input: { invoice_id: invoiceId } })
 }
 ```
 
@@ -293,13 +296,13 @@ The SDK exports structural types for the engine config model so app code can sta
 - `ViewFilter`
 - `ViewPublicAccess`
 
-## Bulk Operations
+## Supporting-record Bulk Helpers
 
-Bulk helpers are sequential fan-out over the standard document endpoints.
-They are designed for predictable behavior across UI and backend clients.
+Bulk helpers are sequential fan-out over the supporting-record endpoints.
+Do not use them to implement a business transaction; publish and execute a domain operation instead.
 
 ```ts
-const results = await kora.bulkCreate([
+const results = await kora.bulkCreateSupportingRecords([
   { doctype: 'Feedback', doc: { title: 'A', rating: 5 } },
   { doctype: 'Feedback', doc: { title: 'B', rating: 4 } },
 ])
@@ -328,9 +331,9 @@ Typical flow:
 
 1. Call `listDoctypes()` or `getDoctype()` to discover schema.
 2. Call `listViews()` or `getView()` to find routes and layouts.
-3. Call `getDoc()` / `getList()` to load data.
+3. Call `getSupportingRecord()` / `listSupportingRecords()` to load data.
 4. Render fields from the returned schema.
-5. Submit with `createDoc()` / `updateDoc()` / `submitAction()`.
+5. Use a published domain operation for owned business changes; use supporting-record methods only where the Engine permits CRUD.
 6. Use `uploadFile()` for image and attachment fields.
 
 ## File Handling
@@ -348,7 +351,7 @@ Requests throw `KoraError` when the server returns a non-2xx response.
 
 ```ts
 try {
-  await kora.getDoc('Order', 'ORD-0001')
+  await kora.getSupportingRecord('Order', 'ORD-0001')
 } catch (err) {
   if (err instanceof KoraError) {
     console.error(err.status, err.message)
@@ -378,6 +381,34 @@ const inbox = await kora.listRequests({
 ```
 
 The server derives requester identity from authentication, filters every inbox projection, and rechecks assignment eligibility and revision when recording a response. These methods require the Engine v2 request routes.
+
+## Published module data and operations
+
+Bind a client to the actor's selected canonical scope, read the actor-filtered catalog, then use the exact published query or operation schema and route. The server rechecks authorization and resolves the provider. Keep the same idempotency key when recovering an uncertain operation; inspect or look up its receipt before deciding what to do next.
+
+```ts
+const scoped = kora.withScope({ tenant_id: 'tenant-1', kind: 'legal_entity', legal_entity_id: 'entity-1' })
+const catalog = await scoped.catalog()
+const query = catalog.published_queries.find((item) => item.name === 'open_orders')
+if (!query) throw new Error('Open orders are not published for this scope')
+
+const page = await scoped.queryPublished(catalog, query.owner_module_id, query.name, {
+  input: {},
+  limit: query.page_limit,
+})
+// Keep next_cursor, snapshot_token, source_revision, as_of and freshness with the data.
+
+const operation = catalog.published_operations.find((item) => item.operation === 'issue_invoice')
+if (!operation || operation.availability !== 'available') throw new Error('Invoice issue is unavailable')
+const idempotencyKey = crypto.randomUUID() // persist this key with the intent before sending
+const receipt = await scoped.executeOperation(catalog, operation.operation_ref, {
+  meta: { idempotency_key: idempotencyKey },
+  input_schema: operation.input_schema,
+  input: { order_ref: { provider_id: 'sales', resource_type: 'order', id: 'ORD-1', scope: scoped.scope } },
+})
+```
+
+`completed` describes that operation's result. Payment, fulfillment and other downstream workflow outcomes can have separate receipts and statuses. The SDK never chooses an internal or external provider.
 
 ## Versioning
 

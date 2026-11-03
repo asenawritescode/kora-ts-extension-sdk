@@ -82,6 +82,80 @@ describe('KoraClient', () => {
     await expect(scoped.request('GET', '/api/v2/modules/catalog')).rejects.toThrow('Malformed successful Kora response')
   })
 
+  it('uses only catalog-published routes, preserves query metadata, and validates published schemas', async () => {
+    const scope = { tenant_id: 'tenant-a', kind: 'legal_entity', legal_entity_id: 'entity-a' } as const
+    const inputRef = { id: 'sales.query.input', version: 1 }
+    const rowsRef = { id: 'sales.query.output', version: 1 }
+    const commandInputRef = { id: 'billing.issue.input', version: 2 }
+    const commandOutputRef = { id: 'billing.issue.output', version: 1 }
+    const catalog = {
+      revision: 9, business_scope: scope, modules: [], allowed_entity_choices: [scope], available_scopes: [scope], blockers: [],
+      published_queries: [{ owner_module_id: 'sales.orders', name: 'open', route: '/api/v1/modules/sales.orders/queries/open', input_schema: inputRef, output_schema: rowsRef, scope_policy: 'entity_owned', allowed_fields: ['ref'], page_limit: 50, presentation: {} }],
+      published_projections: [{ owner_module_id: 'sales.ar', id: 'balance', route: '/api/v1/modules/sales.ar/projections/balance', output_schema: rowsRef, scope_policy: 'entity_owned', allowed_fields: ['ref'] }],
+      published_operations: [{ owner_module_id: 'billing.invoices', operation_ref: 'billing.invoices~billing.invoice~issue', operation: 'issue', capability: 'billing.invoice', availability: 'available', input_schema: commandInputRef, output_schema: commandOutputRef, permissions: ['issue'], presentation: {} }],
+      schemas: [
+        { ref: inputRef, schema: { type: 'object', required: ['status'], properties: { status: { type: 'string', enum: ['open'] } }, additionalProperties: false } },
+        { ref: rowsRef, schema: { type: 'array', items: { type: 'object', required: ['ref'], properties: { ref: { $ref: '#/$defs/BusinessRef' } }, additionalProperties: false }, $defs: { BusinessRef: { type: 'object', required: ['provider_id', 'resource_type', 'id', 'scope'], properties: { provider_id: { type: 'string' }, resource_type: { type: 'string' }, id: { type: 'string' }, scope: { $ref: '#/$defs/BusinessScope' } }, additionalProperties: false }, BusinessScope: { type: 'object', required: ['tenant_id', 'kind', 'legal_entity_id'], properties: { tenant_id: { type: 'string' }, kind: { const: 'legal_entity' }, legal_entity_id: { type: 'string' } }, additionalProperties: false } } } },
+        { ref: commandInputRef, schema: { type: 'object', required: ['invoice_ref'], properties: { invoice_ref: { $ref: '#/$defs/BusinessRef' } }, additionalProperties: false, $defs: { BusinessRef: { type: 'object', required: ['provider_id', 'resource_type', 'id', 'scope'], properties: { provider_id: { type: 'string' }, resource_type: { type: 'string' }, id: { type: 'string' }, scope: { $ref: '#/$defs/BusinessScope' } }, additionalProperties: false }, BusinessScope: { type: 'object', required: ['tenant_id', 'kind', 'legal_entity_id'], properties: { tenant_id: { type: 'string' }, kind: { const: 'legal_entity' }, legal_entity_id: { type: 'string' } }, additionalProperties: false } } } },
+        { ref: commandOutputRef, schema: { type: 'object', required: ['issued'], properties: { issued: { type: 'boolean' } }, additionalProperties: false } },
+      ],
+    }
+    const ref = { provider_id: 'warehouse-west', resource_type: 'invoice', id: 'INV-7', scope }
+    const queryResult = { data: [{ ref }], snapshot_token: 'snapshot-1', source_cursor: 'cursor-9', source_revision: '9', as_of: '2026-11-03T10:00:00Z', freshness: 'stale' }
+    const invalidQueryResult = { ...queryResult, data: [{ ref: { provider_id: 'warehouse-west', id: 'INV-7' } }] }
+    const receipt = { execution_id: '01K7EXECUTION00000000000000000', operation_ref: 'billing.invoices~billing.invoice~issue', business_scope: scope, status: 'completed', output_schema: commandOutputRef, output: { issued: true }, revision: '9' }
+    const calls: Array<{ url: string; headers: Headers; body?: string }> = []
+    const replies: unknown[] = [
+      { data: catalog }, { data: queryResult }, { data: invalidQueryResult }, { data: queryResult }, { data: receipt }, { data: receipt }, { data: receipt },
+    ]
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), headers: new Headers(init?.headers), body: typeof init?.body === 'string' ? init.body : undefined })
+      if (String(input).includes('/modules/operations/') && calls.filter(call => call.url.includes('/modules/operations/')).length > 1) {
+        throw new DOMException('response lost', 'AbortError')
+      }
+      return new Response(JSON.stringify(replies.shift()), { status: 200 })
+    }) as unknown as typeof fetch
+    const scoped = new KoraClient({ baseUrl: 'https://myapp.kora.dev', siteName: 'demo' }).withScope(scope)
+    const published = await scoped.catalog()
+    await expect(scoped.queryPublished(published, 'sales.orders', 'open', { input: { status: 'closed' } })).rejects.toThrow('Published schema validation failed')
+    expect(calls).toHaveLength(1)
+    const query = await scoped.queryPublished(published, 'sales.orders', 'open', { input: { status: 'open' }, limit: 20 })
+    await expect(scoped.getProjection(published, 'sales.ar', 'balance')).rejects.toThrow('Published schema validation failed')
+    const projection = await scoped.getProjection(published, 'sales.ar', 'balance')
+    const command = { meta: { idempotency_key: 'issue-key-1' }, input_schema: commandInputRef, input: { invoice_ref: ref } }
+    const executed = await scoped.executeOperation(published, receipt.operation_ref, command)
+    const beforeRejected = calls.length
+    const unavailable = { ...published, published_operations: published.published_operations.map(item => ({ ...item, availability: 'draining' as const })) }
+    await expect(scoped.executeOperation(unavailable, receipt.operation_ref, command)).rejects.toThrow('not available')
+    expect(calls).toHaveLength(beforeRejected)
+    await expect(scoped.executeOperation(published, receipt.operation_ref, command)).rejects.toMatchObject({ name: 'AbortError' })
+    const inspected = await scoped.getExecution(published, receipt.execution_id)
+    const found = await scoped.lookupExecution(published, { operation_ref: receipt.operation_ref, idempotency_key: 'issue-key-1' })
+
+    expect(query).toEqual(queryResult)
+    expect(query.data).toEqual([{ ref }])
+    expect(query.snapshot_token).toBe('snapshot-1')
+    expect(query.freshness).toBe('stale')
+    expect(projection.data).toEqual(queryResult.data)
+    expect(executed).toEqual(receipt)
+    expect(inspected).toEqual(receipt)
+    expect(found).toEqual(receipt)
+    expect(calls.map(call => new URL(call.url).pathname)).toEqual([
+      '/s/demo/api/v2/modules/catalog',
+      '/s/demo/api/v1/modules/sales.orders/queries/open',
+      '/s/demo/api/v1/modules/sales.ar/projections/balance',
+      '/s/demo/api/v1/modules/sales.ar/projections/balance',
+      '/s/demo/api/v2/modules/operations/billing.invoices~billing.invoice~issue/execute',
+      '/s/demo/api/v2/modules/operations/billing.invoices~billing.invoice~issue/execute',
+      '/s/demo/api/v2/module-executions/01K7EXECUTION00000000000000000',
+      '/s/demo/api/v2/module-executions/lookup',
+    ])
+    expect(calls.every(call => call.headers.get('X-Kora-Legal-Entity-ID') === 'entity-a')).toBe(true)
+    expect(JSON.parse(calls[4]?.body ?? '{}')).toEqual(command)
+    expect(JSON.parse(calls[5]?.body ?? '{}')).toEqual(command)
+    expect(JSON.parse(calls[7]?.body ?? '{}')).toEqual({ operation_ref: receipt.operation_ref, idempotency_key: 'issue-key-1' })
+  })
+
   it('strips trailing slash from baseUrl', () => {
     const client = new KoraClient({ baseUrl: 'https://myapp.kora.dev/', siteName: 'demo', token: 'test' })
     // No assertion needed — just verifies constructor doesn't throw
@@ -98,7 +172,7 @@ describe('KoraClient', () => {
     globalThis.fetch = fetchSpy as unknown as typeof fetch
 
     const client = new KoraClient({ baseUrl: 'https://myapp.kora.dev', siteName: 'demo', token: 'test' })
-    await client.getList('Order')
+    await client.listSupportingRecords('Order')
     expect(fetchSpy).toHaveBeenCalled()
   })
 
@@ -118,7 +192,7 @@ describe('KoraClient', () => {
       authProvider: () => 'Bearer token-from-provider',
     })
 
-    await client.getList('Order')
+    await client.listSupportingRecords('Order')
     expect(fetchSpy).toHaveBeenCalled()
   })
 
@@ -138,7 +212,7 @@ describe('KoraClient', () => {
     globalThis.fetch = fetchSpy as unknown as typeof fetch
 
     const client = new KoraClient({ baseUrl: 'https://myapp.kora.dev', siteName: 'demo', token: 'test' })
-    const items = await client.getList('Invoice', {
+    const items = await client.listSupportingRecords('Invoice', {
       limit: 10,
       offset: 5,
       orderBy: 'modified DESC',
@@ -162,7 +236,7 @@ describe('KoraClient', () => {
     globalThis.fetch = fetchSpy as unknown as typeof fetch
 
     const client = new KoraClient({ baseUrl: 'https://myapp.kora.dev', siteName: 'demo', token: 'test' })
-    const created = await client.createDoc('Feedback', { title: 'Great product' })
+    const created = await client.createSupportingRecord('Feedback', { title: 'Great product' })
 
     expect(created).toMatchObject({ name: 'FDB-0001' })
     expect(fetchSpy).toHaveBeenCalled()
@@ -311,7 +385,7 @@ describe('KoraClient', () => {
     globalThis.fetch = fetchSpy as unknown as typeof fetch
 
     const client = new KoraClient({ baseUrl: 'https://myapp.kora.dev', siteName: 'demo', token: 'test' })
-    const results = await client.bulkCreate([
+    const results = await client.bulkCreateSupportingRecords([
       { doctype: 'Feedback', doc: { title: 'A' } },
       { doctype: 'Feedback', doc: { title: 'B' } },
     ])
@@ -334,7 +408,7 @@ describe('KoraClient', () => {
     globalThis.fetch = fetchSpy as unknown as typeof fetch
 
     const client = new KoraClient({ baseUrl: 'https://myapp.kora.dev', siteName: 'demo', token: 'test' })
-    const results = await client.bulkDelete([
+    const results = await client.bulkDeleteSupportingRecords([
       { doctype: 'Feedback', name: 'FDB-0001' },
       { doctype: 'Feedback', name: 'FDB-0002' },
     ])
