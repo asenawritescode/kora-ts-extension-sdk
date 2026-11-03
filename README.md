@@ -410,6 +410,16 @@ const receipt = await scoped.executeOperation(catalog, operation.operation_ref, 
 
 `completed` describes that operation's result. Payment, fulfillment and other downstream workflow outcomes can have separate receipts and statuses. The SDK never chooses an internal or external provider.
 
+## Extension credentials and authorization
+
+Use a tenant extension bearer credential issued by the Engine's extension credential administration flow. Keep it in the extension host's secret store and supply it through `authProvider`; never put a management credential or provider secret in the SDK config. Rotate or revoke the extension credential through the same Engine administration surface. Once revoked, requests fail with the server's typed `KoraError.code` and HTTP status.
+
+Engine evaluates the extension's published-operation grants on every catalog, query, execution and receipt request. A catalog entry describes availability but grants no authority by itself. The SDK never sends a caller module ID, provider choice or capability lease. `BusinessRef` values retain `provider_id`, `resource_type`, `id` and the full `scope` when passed as schema-validated operation input.
+
+On a network timeout, keep the original idempotency key and call `lookupExecution({ operation_ref, idempotency_key })`. The lookup does not dispatch work. `outcome_unknown` is a receipt state that needs reconciliation; it is not a rejection and the SDK does not retry it under a new key. `KoraError.code` preserves Engine distinctions such as `permission.denied` and `module.operation_unavailable`.
+
+The executable extension-token suite in [`examples/extension-conformance.ts`](examples/extension-conformance.ts) exercises catalog, published query, operation, a deliberately lost response and receipt recovery, plus denied private CRUD, wrong entity, forged operation and revoked credential cases. The optional second operation reference lets a fresh fixture run the same SDK signature against the second configured provider. Configure its isolated Engine fixture with the variables used by `.github/workflows/extension-conformance.yml`; never use production credentials for this suite.
+
 ## Versioning
 
 This package follows semantic versioning.

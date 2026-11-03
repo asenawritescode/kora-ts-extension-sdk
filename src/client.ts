@@ -485,7 +485,7 @@ export class KoraClient {
 
       if (!response.ok) {
         const errMsg = typeof data.error === 'string' ? data.error : data.error?.message || response.statusText
-        throw new KoraError(errMsg, response.status, data.error)
+        throw new KoraError(errMsg, response.status, data.error, errorCode(data.error))
       }
 
       return data as T
@@ -519,7 +519,7 @@ export class KoraClient {
       if (!response.ok) {
         const envelope = data && typeof data === 'object' ? data as { error?: unknown } : {}
         const error = envelope.error && typeof envelope.error === 'object' ? envelope.error as { message?: unknown } : {}
-        throw new KoraError(typeof envelope.error === 'string' ? envelope.error : typeof error.message === 'string' ? error.message : response.statusText, response.status, envelope.error)
+        throw new KoraError(typeof envelope.error === 'string' ? envelope.error : typeof error.message === 'string' ? error.message : response.statusText, response.status, envelope.error, errorCode(envelope.error))
       }
       if (response.status !== 204 && data === undefined) throw new TypeError('Malformed successful Kora response')
       return data as T
@@ -628,7 +628,7 @@ export class KoraClient {
       const data = await response.json()
       if (!response.ok) {
         const errMsg = typeof data.error === 'string' ? data.error : data.error?.message || response.statusText
-        throw new KoraError(errMsg, response.status, data.error)
+        throw new KoraError(errMsg, response.status, data.error, errorCode(data.error))
       }
       return data.data as T
     } finally {
@@ -699,13 +699,21 @@ function validateOperationReceipt (scope: BusinessScope, operationRef: string, r
 export class KoraError extends Error {
   readonly status: number
   readonly detail?: unknown
+  readonly code?: string
 
-  constructor (message: string, status: number, detail?: unknown) {
+  constructor (message: string, status: number, detail?: unknown, code?: string) {
     super(message)
     this.name = 'KoraError'
     this.status = status
     this.detail = detail
+    this.code = code
   }
+}
+
+function errorCode (detail: unknown): string | undefined {
+  if (detail === null || typeof detail !== 'object' || Array.isArray(detail)) return undefined
+  const candidate = (detail as { code?: unknown; type?: unknown }).code ?? (detail as { type?: unknown }).type
+  return typeof candidate === 'string' ? candidate : undefined
 }
 
 function isRequestPage (value: unknown, itemType: 'RequestView' | 'RequestHistoryEntry'): boolean {
