@@ -80,7 +80,7 @@ describe('generated Engine v2 contracts', () => {
     expect(isContract('ApplyPackage', { ...apply, artifact_ref: 'https://example.test/artifact' })).toBe(false)
     expect(isContract('ProvisionTenant', {
       meta: { idempotency_key: 'provision-tenant-0001' }, tenant_id: 'tenant-1',
-      bootstrap_admin_email: 'admin@example.test', primary_alias: 'tenant.example.test', aliases: [], deployment_id: 'deploy-1', database_allocation_ref: 'mysql:allocation-1',
+      bootstrap_admin_email: 'admin@example.test', bootstrap_admin_subject: 'cloud-user-1', primary_alias: 'tenant.example.test', aliases: [], deployment_id: 'deploy-1', database_allocation_ref: 'mysql:allocation-1',
     })).toBe(true)
     expect(isContract('ProvisionTenant', {
       meta: { idempotency_key: 'provision-tenant-0001' }, tenant_id: 'tenant-1',
