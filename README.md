@@ -19,7 +19,7 @@ It is useful for:
 
 ## Architecture and contract migration
 
-The [architecture contract notes](docs/architecture-contracts.md) track the Engine-owned wire boundary. Generated Engine v2 wire types and runtime validators are exported from the SDK root with a development-snapshot base revision and artifact digest. Request/workflow transport methods are not exposed until the Engine endpoints and capability gates are implemented.
+The [architecture contract notes](docs/architecture-contracts.md) track the Engine-owned wire boundary. Generated Engine v2 wire types and runtime validators are exported from the SDK root with a development-snapshot base revision and artifact digest. Typed request and workflow methods are available; use `getCapabilities()` to check tenant support because older Engines and tenants without assembled services may not support every endpoint. The Engine remains responsible for authorization and domain eligibility.
 
 ## Installation
 
