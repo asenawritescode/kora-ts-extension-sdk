@@ -71,14 +71,14 @@ describe('KoraClient', () => {
   it('preserves empty success, structured errors, and malformed success outcomes on scoped transport', async () => {
     const replies: Response[] = [
       new Response(null, { status: 204 }),
-      new Response(JSON.stringify({ error: { code: 'access_revoked', message: 'Access revoked' } }), { status: 403 }),
+      new Response(JSON.stringify({ error: { code: 'permission.denied', message: 'Access revoked' } }), { status: 403 }),
       new Response('not-json', { status: 200 }),
     ]
     globalThis.fetch = mock(async () => replies.shift() as Response) as unknown as typeof fetch
     const scoped = new KoraClient({ baseUrl: 'https://myapp.kora.dev', siteName: 'demo' })
       .withScope({ tenant_id: 'tenant-a', kind: 'legal_entity', legal_entity_id: 'entity-a' })
     expect(await scoped.request('POST', '/api/v2/modules/operations/op/execute')).toBeUndefined()
-    await expect(scoped.request('GET', '/api/v2/modules/catalog')).rejects.toMatchObject({ name: 'KoraError', status: 403 })
+    await expect(scoped.request('GET', '/api/v2/modules/catalog')).rejects.toMatchObject({ name: 'KoraError', status: 403, code: 'permission.denied' })
     await expect(scoped.request('GET', '/api/v2/modules/catalog')).rejects.toThrow('Malformed successful Kora response')
   })
 
@@ -431,9 +431,10 @@ describe('KoraClient', () => {
 
 describe('KoraError', () => {
   it('has name and status', () => {
-    const err = new KoraError('Not found', 404, { type: 'NotFound' })
+    const err = new KoraError('Permission denied', 403, { code: 'permission.denied' }, 'permission.denied')
     expect(err.name).toBe('KoraError')
-    expect(err.status).toBe(404)
-    expect(err.message).toBe('Not found')
+    expect(err.status).toBe(403)
+    expect(err.message).toBe('Permission denied')
+    expect(err.code).toBe('permission.denied')
   })
 })

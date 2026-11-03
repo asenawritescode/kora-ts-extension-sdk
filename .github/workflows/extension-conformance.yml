@@ -1,0 +1,39 @@
+name: Extension authorization conformance
+
+on:
+  workflow_dispatch:
+
+jobs:
+  extension-http-conformance:
+    runs-on: ubuntu-latest
+    environment: engine-contract-conformance
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      - run: bun run test:extension-conformance
+        env:
+          KORA_BASE_URL: ${{ vars.KORA_BASE_URL }}
+          KORA_SITE_NAME: ${{ vars.KORA_SITE_NAME }}
+          KORA_TENANT_ID: ${{ vars.KORA_TENANT_ID }}
+          KORA_LEGAL_ENTITY_ID: ${{ vars.KORA_LEGAL_ENTITY_ID }}
+          KORA_DENIED_LEGAL_ENTITY_ID: ${{ vars.KORA_DENIED_LEGAL_ENTITY_ID }}
+          KORA_EXTENSION_TOKEN: ${{ secrets.KORA_EXTENSION_TOKEN }}
+          KORA_REVOKED_EXTENSION_TOKEN: ${{ secrets.KORA_REVOKED_EXTENSION_TOKEN }}
+          KORA_QUERY_OWNER_MODULE: ${{ vars.KORA_QUERY_OWNER_MODULE }}
+          KORA_QUERY_NAME: ${{ vars.KORA_QUERY_NAME }}
+          KORA_QUERY_INPUT_JSON: ${{ vars.KORA_QUERY_INPUT_JSON }}
+          KORA_OPERATION_REF: ${{ vars.KORA_OPERATION_REF }}
+          KORA_OPERATION_INPUT_SCHEMA_ID: ${{ vars.KORA_OPERATION_INPUT_SCHEMA_ID }}
+          KORA_OPERATION_INPUT_SCHEMA_VERSION: ${{ vars.KORA_OPERATION_INPUT_SCHEMA_VERSION }}
+          KORA_OPERATION_INPUT_JSON: ${{ vars.KORA_OPERATION_INPUT_JSON }}
+          KORA_OPERATION_IDEMPOTENCY_KEY: ${{ vars.KORA_OPERATION_IDEMPOTENCY_KEY }}
+          KORA_SECOND_PROVIDER_OPERATION_REF: ${{ vars.KORA_SECOND_PROVIDER_OPERATION_REF }}
+          KORA_SECOND_PROVIDER_IDEMPOTENCY_KEY: ${{ vars.KORA_SECOND_PROVIDER_IDEMPOTENCY_KEY }}
+          KORA_SECOND_PROVIDER_INPUT_JSON: ${{ vars.KORA_SECOND_PROVIDER_INPUT_JSON }}
+          KORA_FORGED_OPERATION_REF: ${{ vars.KORA_FORGED_OPERATION_REF }}
+          KORA_PRIVATE_RECORD_PATH: ${{ vars.KORA_PRIVATE_RECORD_PATH }}
+          KORA_PRIVATE_RECORD_JSON: ${{ vars.KORA_PRIVATE_RECORD_JSON }}
