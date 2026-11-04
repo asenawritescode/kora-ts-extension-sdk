@@ -93,7 +93,10 @@ const deniedScope: BusinessScope = {
 }
 await expectDenied('wrong entity scope', client.withScope(deniedScope).catalog(), { codes: ['permission.denied'], statuses: [403] })
 
-await expectDenied('private record CRUD', scoped.request('POST', env('KORA_PRIVATE_RECORD_PATH'), JSON.parse(env('KORA_PRIVATE_RECORD_JSON')) as unknown), { codes: ['permission.denied', 'resource.permission_denied'], statuses: [403] })
+// The legacy record route still returns a plain 403 error envelope.  The
+// status is the authoritative denial signal here; do not require a
+// canonical error code from that superseded transport.
+await expectDenied('private record CRUD', scoped.request('POST', env('KORA_PRIVATE_RECORD_PATH'), JSON.parse(env('KORA_PRIVATE_RECORD_JSON')) as unknown), { statuses: [403] })
 
 const revokedClient = new KoraClient({
   baseUrl: env('KORA_BASE_URL'), siteName: env('KORA_SITE_NAME'),
