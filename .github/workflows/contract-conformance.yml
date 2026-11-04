@@ -1,0 +1,26 @@
+name: Contract conformance
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  sdk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - uses: actions/checkout@v4
+        with:
+          repository: asenawritescode/kora
+          ref: 689e757f3e29321cb85ca55edb9d67d63ddfcb82
+          path: engine
+      - run: bun install --frozen-lockfile
+      - run: bun run check:contracts
+        env:
+          KORA_ENGINE_ROOT: ${{ github.workspace }}/engine
+      - run: bun test src/client.test.ts src/contract-fixtures.test.ts src/generated/engine-v2.test.ts
+      - run: bun run build
+      - run: bun run lint src/client.ts src/types.ts src/index.ts src/validation.ts src/client.test.ts src/contract-fixtures.test.ts src/generated/engine-v2.test.ts

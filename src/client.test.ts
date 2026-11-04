@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, it, expect, mock } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { KoraClient, KoraError } from './client.js'
 import { validateScriptName, validateScriptType } from './validation.js'
+
+const legacyNavigationFixture = JSON.parse(readFileSync(
+  fileURLToPath(new URL('../contract-fixtures/navigation-v1-legacy.json', import.meta.url)),
+  'utf8',
+)) as unknown
 
 const originalFetch = globalThis.fetch
 
@@ -41,6 +48,40 @@ describe('validateScriptType', () => {
 })
 
 describe('KoraClient', () => {
+  it('creates immutable concurrent entity scopes and sends each scope only on its own request', async () => {
+    const calls: Array<{ url: string; headers: Headers }> = []
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), headers: new Headers(init?.headers) })
+      return new Response(JSON.stringify({ data: { ok: true } }), { status: 200 })
+    }) as unknown as typeof fetch
+    const client = new KoraClient({ baseUrl: 'https://myapp.kora.dev', siteName: 'demo' })
+    const entityA = client.withScope({ tenant_id: 'tenant-a', kind: 'legal_entity', legal_entity_id: 'entity-a' })
+    const entityB = client.withScope({ tenant_id: 'tenant-a', kind: 'legal_entity', legal_entity_id: 'entity-b' })
+    await Promise.all([entityA.request('GET', '/api/v2/modules/catalog'), entityB.request('GET', '/api/v2/modules/catalog')])
+    expect(calls.map(call => call.headers.get('X-Kora-Legal-Entity-ID')).sort()).toEqual(['entity-a', 'entity-b'])
+    expect(calls.every(call => call.headers.get('X-Kora-Legal-Entity-ID') === 'entity-a' || call.headers.get('X-Kora-Legal-Entity-ID') === 'entity-b')).toBe(true)
+    expect(Object.isFrozen(entityA.scope)).toBe(true)
+    expect(() => client.withScope({ tenant_id: 'tenant-a', kind: 'legal_entity' } as never)).toThrow('Invalid Kora BusinessScope')
+    await expect(entityA.request('POST', '/api/v2/modules/operations/op/execute', {
+      business_scope: { tenant_id: 'tenant-a', kind: 'legal_entity', legal_entity_id: 'entity-b' },
+    })).rejects.toThrow('does not match scoped client')
+    expect(calls).toHaveLength(2)
+  })
+
+  it('preserves empty success, structured errors, and malformed success outcomes on scoped transport', async () => {
+    const replies: Response[] = [
+      new Response(null, { status: 204 }),
+      new Response(JSON.stringify({ error: { code: 'access_revoked', message: 'Access revoked' } }), { status: 403 }),
+      new Response('not-json', { status: 200 }),
+    ]
+    globalThis.fetch = mock(async () => replies.shift() as Response) as unknown as typeof fetch
+    const scoped = new KoraClient({ baseUrl: 'https://myapp.kora.dev', siteName: 'demo' })
+      .withScope({ tenant_id: 'tenant-a', kind: 'legal_entity', legal_entity_id: 'entity-a' })
+    expect(await scoped.request('POST', '/api/v2/modules/operations/op/execute')).toBeUndefined()
+    await expect(scoped.request('GET', '/api/v2/modules/catalog')).rejects.toMatchObject({ name: 'KoraError', status: 403 })
+    await expect(scoped.request('GET', '/api/v2/modules/catalog')).rejects.toThrow('Malformed successful Kora response')
+  })
+
   it('strips trailing slash from baseUrl', () => {
     const client = new KoraClient({ baseUrl: 'https://myapp.kora.dev/', siteName: 'demo', token: 'test' })
     // No assertion needed — just verifies constructor doesn't throw
@@ -151,7 +192,7 @@ describe('KoraClient', () => {
   it('uses Engine capability discovery and treats older navigation responses as unsupported', async () => {
     const responses = [
       { data: { capabilities_version: '2', supported_capabilities: ['requests.inbox.v2', 'workflow.orchestration.v2'] } },
-      { data: { user: { name: 'alice' } } },
+      legacyNavigationFixture,
     ]
     const calls: string[] = []
     globalThis.fetch = mock(async (input: RequestInfo | URL) => {

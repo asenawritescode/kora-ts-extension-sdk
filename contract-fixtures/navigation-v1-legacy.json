@@ -1,0 +1,15 @@
+{
+  "data": {
+    "modules": [],
+    "views": [],
+    "branding": {
+      "app_name": "Demo Workspace",
+      "primary_color": "#334155"
+    },
+    "copy": {},
+    "user": {
+      "name": "alice"
+    },
+    "admin_capabilities": []
+  }
+}

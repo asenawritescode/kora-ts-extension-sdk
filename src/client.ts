@@ -24,6 +24,7 @@ import type {
 import {
   decodeContract,
   isContract,
+  type BusinessScope,
   type CancelRequest,
   type PageRequest,
   type ReassignRequest,
@@ -64,6 +65,18 @@ export class KoraClient {
     this.#config.baseUrl = this.#config.baseUrl.replace(/\/$/, '')
     this.#config.siteName = this.#config.siteName.trim()
     this.#fetchImpl = config.fetch ?? fetch
+  }
+
+  /** Return an immutable view of this client bound to one canonical business scope. */
+  withScope (scope: BusinessScope): KoraScopedClient {
+    validateBusinessScope(scope)
+    const scopedScope = Object.freeze({ ...scope })
+    const parent = this
+    return Object.freeze({
+      scope: scopedScope,
+      request: <T>(method: string, path: string, body?: unknown, signal?: AbortSignal) =>
+        parent.#requestScoped<T>(scopedScope, method, path, body, signal),
+    })
   }
 
   /** Execute a custom API method (extension endpoint) */
@@ -474,6 +487,40 @@ export class KoraClient {
     }
   }
 
+  async #requestScoped<T> (scope: BusinessScope, method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+    validateBusinessScope(scope)
+    if (body !== undefined && body !== null && typeof body === 'object' && !Array.isArray(body)) {
+      const requestedScope = (body as { business_scope?: unknown }).business_scope
+      if (requestedScope !== undefined && (!isContract<BusinessScope>('BusinessScope', requestedScope) || !sameBusinessScope(scope, requestedScope))) {
+        throw new TypeError('Kora request scope does not match scoped client')
+      }
+    }
+    const url = `${this.#basePath()}${path}`
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    applyBusinessScopeHeaders(headers, scope)
+    const authHeader = await this.#resolveAuthHeader()
+    if (authHeader) headers.Authorization = authHeader
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), this.#config.timeout)
+    const relayAbort = () => controller.abort(signal?.reason)
+    if (signal?.aborted) relayAbort()
+    else signal?.addEventListener('abort', relayAbort, { once: true })
+    try {
+      const response = await this.#fetchImpl(url, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal: controller.signal })
+      const data: unknown = response.status === 204 ? undefined : await response.json().catch(() => undefined)
+      if (!response.ok) {
+        const envelope = data && typeof data === 'object' ? data as { error?: unknown } : {}
+        const error = envelope.error && typeof envelope.error === 'object' ? envelope.error as { message?: unknown } : {}
+        throw new KoraError(typeof envelope.error === 'string' ? envelope.error : typeof error.message === 'string' ? error.message : response.statusText, response.status, envelope.error)
+      }
+      if (response.status !== 204 && data === undefined) throw new TypeError('Malformed successful Kora response')
+      return data as T
+    } finally {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', relayAbort)
+    }
+  }
+
   async #requestMultipart<T> (path: string, body: FormData): Promise<T> {
     const url = `${this.#basePath()}${path}`
     const headers: Record<string, string> = {}
@@ -514,6 +561,24 @@ export class KoraClient {
   #basePath (): string {
     return `${this.#config.baseUrl}/s/${encodeURIComponent(this.#config.siteName)}`
   }
+}
+
+export interface KoraScopedClient {
+  readonly scope: BusinessScope
+  request<T = unknown>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T>
+}
+
+function validateBusinessScope (scope: BusinessScope): void {
+  if (!isContract<BusinessScope>('BusinessScope', scope)) throw new TypeError('Invalid Kora BusinessScope')
+}
+
+function applyBusinessScopeHeaders (headers: Record<string, string>, scope: BusinessScope): void {
+  if (scope.kind === 'legal_entity') headers['X-Kora-Legal-Entity-ID'] = scope.legal_entity_id
+}
+
+function sameBusinessScope (left: BusinessScope, right: BusinessScope): boolean {
+  return left.tenant_id === right.tenant_id && left.kind === right.kind &&
+    (left.kind === 'legal_entity' && right.kind === 'legal_entity' ? left.legal_entity_id === right.legal_entity_id : left.kind === 'tenant' && right.kind === 'tenant')
 }
 
 export class KoraError extends Error {

@@ -42,7 +42,7 @@ export type {
   KoraProvider,
 } from './types.js'
 
-export { KoraClient, KoraError } from './client.js'
+export { KoraClient, KoraError, type KoraScopedClient } from './client.js'
 export { validateScriptName, validateScriptType } from './validation.js'
 export { EventType, ScriptType } from './types.js'
 
