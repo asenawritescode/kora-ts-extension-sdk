@@ -43,6 +43,7 @@ export type {
 } from './types.js'
 
 export { KoraClient, KoraError, type KoraScopedClient } from './client.js'
+export { assertPublishedSchema } from './schema-validation.js'
 export { validateScriptName, validateScriptType } from './validation.js'
 export { EventType, ScriptType } from './types.js'
 

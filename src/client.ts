@@ -17,7 +17,6 @@ import type {
   Workflow,
   FileRef,
   Query,
-  MutationResult,
   BulkDocItem,
   BulkDocResult,
 } from './types.js'
@@ -42,7 +41,15 @@ import {
   type WorkflowInstance,
   type ReconcileWorkflow,
   type CancelWorkflow,
+  type ApplicationCatalog,
+  type ExecutePublishedOperation,
+  type LookupPublishedOperation,
+  type OperationReceipt,
+  type PublishedQueryRequest,
+  type QueryResult,
+  type SchemaRef,
 } from './generated/engine-v2.js'
+import { assertPublishedSchema } from './schema-validation.js'
 
 export class KoraClient {
   readonly #config: {
@@ -76,6 +83,12 @@ export class KoraClient {
       scope: scopedScope,
       request: <T>(method: string, path: string, body?: unknown, signal?: AbortSignal) =>
         parent.#requestScoped<T>(scopedScope, method, path, body, signal),
+      catalog: (signal?: AbortSignal) => parent.#getCatalog(scopedScope, signal),
+      queryPublished: (catalog: ApplicationCatalog, owner: string, name: string, request: PublishedQueryRequest, signal?: AbortSignal) => parent.#queryPublished(scopedScope, catalog, owner, name, request, signal),
+      getProjection: (catalog: ApplicationCatalog, owner: string, id: string, signal?: AbortSignal) => parent.#getProjection(scopedScope, catalog, owner, id, signal),
+      executeOperation: (catalog: ApplicationCatalog, operationRef: string, command: ExecutePublishedOperation, signal?: AbortSignal) => parent.#executeOperation(scopedScope, catalog, operationRef, command, signal),
+      getExecution: (catalog: ApplicationCatalog, executionId: string, signal?: AbortSignal) => parent.#getExecution(scopedScope, catalog, executionId, signal),
+      lookupExecution: (catalog: ApplicationCatalog, lookup: LookupPublishedOperation, signal?: AbortSignal) => parent.#lookupExecution(scopedScope, catalog, lookup, signal),
     })
   }
 
@@ -243,19 +256,14 @@ export class KoraClient {
     return decodeContract<WorkflowInstance>('WorkflowInstance', response.data)
   }
 
-  /** Trigger a workflow action or submit a generic mutation payload. */
-  async submitAction<T = Record<string, unknown>> (actionId: string, body: Record<string, unknown>): Promise<MutationResult<T>> {
-    return this.#request<MutationResult<T>>('POST', `/api/v1/view/action/${encodeURIComponent(actionId)}`, body)
-  }
-
-  /** Get a document by doctype and name. */
-  async getDoc<T = Record<string, unknown>> (doctype: string, name: string): Promise<T> {
+  /** Read a supporting record that the Engine permits this caller to access. */
+  async getSupportingRecord<T = Record<string, unknown>> (doctype: string, name: string): Promise<T> {
     const res = await this.#request<DocumentEnvelope<T>>('GET', `/api/resource/${encodeURIComponent(doctype)}/${encodeURIComponent(name)}`)
     return res.data
   }
 
-  /** List documents for a doctype. */
-  async getList<T = Record<string, unknown>> (doctype: string, query: ListQuery = {}): Promise<T[]> {
+  /** List permitted supporting records for a doctype. */
+  async listSupportingRecords<T = Record<string, unknown>> (doctype: string, query: ListQuery = {}): Promise<T[]> {
     const params = new URLSearchParams()
     if (query.limit !== undefined) params.set('limit', String(query.limit))
     if (query.offset !== undefined) params.set('offset', String(query.offset))
@@ -273,29 +281,29 @@ export class KoraClient {
     return res.data
   }
 
-  /** Create a document. */
-  async createDoc<T = Record<string, unknown>> (doctype: string, doc: Record<string, unknown>): Promise<T> {
+  /** Create a permitted supporting record. */
+  async createSupportingRecord<T = Record<string, unknown>> (doctype: string, doc: Record<string, unknown>): Promise<T> {
     const res = await this.#request<DocumentEnvelope<T>>('POST', `/api/resource/${encodeURIComponent(doctype)}`, doc)
     return res.data
   }
 
-  /** Update a document. */
-  async updateDoc<T = Record<string, unknown>> (doctype: string, name: string, doc: Record<string, unknown>): Promise<T> {
+  /** Update a permitted supporting record. */
+  async updateSupportingRecord<T = Record<string, unknown>> (doctype: string, name: string, doc: Record<string, unknown>): Promise<T> {
     const res = await this.#request<DocumentEnvelope<T>>('PUT', `/api/resource/${encodeURIComponent(doctype)}/${encodeURIComponent(name)}`, doc)
     return res.data
   }
 
-  /** Delete a document. */
-  async deleteDoc (doctype: string, name: string): Promise<void> {
+  /** Delete a permitted supporting record. */
+  async deleteSupportingRecord (doctype: string, name: string): Promise<void> {
     await this.#request('DELETE', `/api/resource/${encodeURIComponent(doctype)}/${encodeURIComponent(name)}`)
   }
 
-  /** Create many documents sequentially and collect per-item results. */
-  async bulkCreate<T = Record<string, unknown>> (items: Array<BulkDocItem<T>>): Promise<Array<BulkDocResult<T>>> {
+  /** Create supporting records sequentially; this is not a domain transaction. */
+  async bulkCreateSupportingRecords<T = Record<string, unknown>> (items: Array<BulkDocItem<T>>): Promise<Array<BulkDocResult<T>>> {
     const results: Array<BulkDocResult<T>> = []
     for (const [index, item] of items.entries()) {
       try {
-        const data = await this.createDoc<T>(item.doctype, item.doc ?? {})
+        const data = await this.createSupportingRecord<T>(item.doctype, item.doc ?? {})
         results.push({
           index,
           doctype: item.doctype,
@@ -314,12 +322,12 @@ export class KoraClient {
     return results
   }
 
-  /** Update many documents sequentially and collect per-item results. */
-  async bulkUpdate<T = Record<string, unknown>> (items: Array<BulkDocItem<T> & { name: string }>): Promise<Array<BulkDocResult<T>>> {
+  /** Update supporting records sequentially; this is not a domain transaction. */
+  async bulkUpdateSupportingRecords<T = Record<string, unknown>> (items: Array<BulkDocItem<T> & { name: string }>): Promise<Array<BulkDocResult<T>>> {
     const results: Array<BulkDocResult<T>> = []
     for (const [index, item] of items.entries()) {
       try {
-        const data = await this.updateDoc<T>(item.doctype, item.name, item.doc ?? {})
+        const data = await this.updateSupportingRecord<T>(item.doctype, item.name, item.doc ?? {})
         results.push({
           index,
           doctype: item.doctype,
@@ -340,12 +348,12 @@ export class KoraClient {
     return results
   }
 
-  /** Delete many documents sequentially and collect per-item results. */
-  async bulkDelete (items: Array<{ doctype: string; name: string }>): Promise<Array<BulkDocResult<void>>> {
+  /** Delete supporting records sequentially; this is not a domain transaction. */
+  async bulkDeleteSupportingRecords (items: Array<{ doctype: string; name: string }>): Promise<Array<BulkDocResult<void>>> {
     const results: Array<BulkDocResult<void>> = []
     for (const [index, item] of items.entries()) {
       try {
-        await this.deleteDoc(item.doctype, item.name)
+        await this.deleteSupportingRecord(item.doctype, item.name)
         results.push({
           index,
           doctype: item.doctype,
@@ -477,7 +485,7 @@ export class KoraClient {
 
       if (!response.ok) {
         const errMsg = typeof data.error === 'string' ? data.error : data.error?.message || response.statusText
-        throw new KoraError(errMsg, response.status, data.error)
+        throw new KoraError(errMsg, response.status, data.error, errorCode(data.error))
       }
 
       return data as T
@@ -511,7 +519,7 @@ export class KoraClient {
       if (!response.ok) {
         const envelope = data && typeof data === 'object' ? data as { error?: unknown } : {}
         const error = envelope.error && typeof envelope.error === 'object' ? envelope.error as { message?: unknown } : {}
-        throw new KoraError(typeof envelope.error === 'string' ? envelope.error : typeof error.message === 'string' ? error.message : response.statusText, response.status, envelope.error)
+        throw new KoraError(typeof envelope.error === 'string' ? envelope.error : typeof error.message === 'string' ? error.message : response.statusText, response.status, envelope.error, errorCode(envelope.error))
       }
       if (response.status !== 204 && data === undefined) throw new TypeError('Malformed successful Kora response')
       return data as T
@@ -519,6 +527,86 @@ export class KoraClient {
       clearTimeout(timer)
       signal?.removeEventListener('abort', relayAbort)
     }
+  }
+
+  async #getCatalog (scope: BusinessScope, signal?: AbortSignal): Promise<ApplicationCatalog> {
+    const response = await this.#requestScoped<{ data?: unknown }>(scope, 'GET', '/api/v2/modules/catalog', undefined, signal)
+    const catalog = decodeContract<ApplicationCatalog>('ApplicationCatalog', response.data)
+    assertCatalogScope(scope, catalog)
+    return catalog
+  }
+
+  async #queryPublished (scope: BusinessScope, catalog: ApplicationCatalog, owner: string, name: string, request: PublishedQueryRequest, signal?: AbortSignal): Promise<QueryResult> {
+    assertCatalogScope(scope, catalog)
+    decodeContract<PublishedQueryRequest>('PublishedQueryRequest', request)
+    const query = catalog.published_queries.find(item => item.owner_module_id === owner && item.name === name)
+    if (!query) throw new TypeError('Published query is not present in the authorized catalog')
+    validateCatalogSchema(catalog, query.input_schema, request.input)
+    const result = await this.#requestCatalogRoute<{ data?: unknown }>(scope, query.route, 'POST', request, signal)
+    const page = decodeContract<QueryResult>('QueryResult', result.data)
+    validateCatalogSchema(catalog, query.output_schema, page.data)
+    return page
+  }
+
+  async #getProjection (scope: BusinessScope, catalog: ApplicationCatalog, owner: string, id: string, signal?: AbortSignal): Promise<QueryResult> {
+    assertCatalogScope(scope, catalog)
+    const projection = catalog.published_projections.find(item => item.owner_module_id === owner && item.id === id)
+    if (!projection) throw new TypeError('Published projection is not present in the authorized catalog')
+    const result = await this.#requestCatalogRoute<{ data?: unknown }>(scope, projection.route, 'GET', undefined, signal)
+    const page = decodeContract<QueryResult>('QueryResult', result.data)
+    validateCatalogSchema(catalog, projection.output_schema, page.data)
+    return page
+  }
+
+  async #executeOperation (scope: BusinessScope, catalog: ApplicationCatalog, operationRef: string, command: ExecutePublishedOperation, signal?: AbortSignal): Promise<OperationReceipt> {
+    assertCatalogScope(scope, catalog)
+    decodeContract<ExecutePublishedOperation>('ExecutePublishedOperation', command)
+    const operation = catalog.published_operations.find(item => item.operation_ref === operationRef)
+    if (!operation || operation.availability !== 'available') throw new TypeError('Published operation is not available in the authorized catalog')
+    if (!sameSchemaRef(command.input_schema, operation.input_schema)) throw new TypeError('Published operation input schema does not match the catalog')
+    validateCatalogSchema(catalog, operation.input_schema, command.input)
+    const envelope = await this.#requestScoped<{ data?: unknown }>(scope, 'POST', `/api/v2/modules/operations/${encodeURIComponent(operationRef)}/execute`, command, signal)
+    const receipt = decodeContract<OperationReceipt>('OperationReceipt', envelope.data)
+    validateOperationReceipt(scope, operationRef, receipt)
+    if (receipt.status === 'completed') {
+      if (!sameSchemaRef(receipt.output_schema, operation.output_schema)) throw new TypeError('Operation receipt output schema does not match the catalog')
+      validateCatalogSchema(catalog, operation.output_schema, receipt.output)
+    }
+    return receipt
+  }
+
+  async #getExecution (scope: BusinessScope, catalog: ApplicationCatalog, executionId: string, signal?: AbortSignal): Promise<OperationReceipt> {
+    assertCatalogScope(scope, catalog)
+    const envelope = await this.#requestScoped<{ data?: unknown }>(scope, 'GET', `/api/v2/module-executions/${encodeURIComponent(executionId)}`, undefined, signal)
+    const receipt = decodeContract<OperationReceipt>('OperationReceipt', envelope.data)
+    const operation = catalog.published_operations.find(item => item.operation_ref === receipt.operation_ref)
+    if (!operation) throw new TypeError('Operation receipt is outside the authorized catalog')
+    validateOperationReceipt(scope, operation.operation_ref, receipt)
+    if (receipt.status === 'completed') {
+      if (!sameSchemaRef(receipt.output_schema, operation.output_schema)) throw new TypeError('Operation receipt output schema does not match the catalog')
+      validateCatalogSchema(catalog, operation.output_schema, receipt.output)
+    }
+    return receipt
+  }
+
+  async #lookupExecution (scope: BusinessScope, catalog: ApplicationCatalog, lookup: LookupPublishedOperation, signal?: AbortSignal): Promise<OperationReceipt> {
+    assertCatalogScope(scope, catalog)
+    decodeContract<LookupPublishedOperation>('LookupPublishedOperation', lookup)
+    const operation = catalog.published_operations.find(item => item.operation_ref === lookup.operation_ref)
+    if (!operation) throw new TypeError('Operation is not present in the authorized catalog')
+    const envelope = await this.#requestScoped<{ data?: unknown }>(scope, 'POST', '/api/v2/module-executions/lookup', lookup, signal)
+    const receipt = decodeContract<OperationReceipt>('OperationReceipt', envelope.data)
+    validateOperationReceipt(scope, lookup.operation_ref, receipt)
+    if (receipt.status === 'completed') {
+      if (!sameSchemaRef(receipt.output_schema, operation.output_schema)) throw new TypeError('Operation receipt output schema does not match the catalog')
+      validateCatalogSchema(catalog, operation.output_schema, receipt.output)
+    }
+    return receipt
+  }
+
+  async #requestCatalogRoute<T> (scope: BusinessScope, route: string, method: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+    if (!route.startsWith('/api/v1/modules/') || route.includes('..') || route.includes('?') || route.includes('#')) throw new TypeError('Catalog contains an invalid published route')
+    return this.#requestScoped<T>(scope, method, route, body, signal)
   }
 
   async #requestMultipart<T> (path: string, body: FormData): Promise<T> {
@@ -540,7 +628,7 @@ export class KoraClient {
       const data = await response.json()
       if (!response.ok) {
         const errMsg = typeof data.error === 'string' ? data.error : data.error?.message || response.statusText
-        throw new KoraError(errMsg, response.status, data.error)
+        throw new KoraError(errMsg, response.status, data.error, errorCode(data.error))
       }
       return data.data as T
     } finally {
@@ -566,6 +654,12 @@ export class KoraClient {
 export interface KoraScopedClient {
   readonly scope: BusinessScope
   request<T = unknown>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T>
+  catalog(signal?: AbortSignal): Promise<ApplicationCatalog>
+  queryPublished(catalog: ApplicationCatalog, owner: string, name: string, request: PublishedQueryRequest, signal?: AbortSignal): Promise<QueryResult>
+  getProjection(catalog: ApplicationCatalog, owner: string, id: string, signal?: AbortSignal): Promise<QueryResult>
+  executeOperation(catalog: ApplicationCatalog, operationRef: string, command: ExecutePublishedOperation, signal?: AbortSignal): Promise<OperationReceipt>
+  getExecution(catalog: ApplicationCatalog, executionId: string, signal?: AbortSignal): Promise<OperationReceipt>
+  lookupExecution(catalog: ApplicationCatalog, lookup: LookupPublishedOperation, signal?: AbortSignal): Promise<OperationReceipt>
 }
 
 function validateBusinessScope (scope: BusinessScope): void {
@@ -581,16 +675,45 @@ function sameBusinessScope (left: BusinessScope, right: BusinessScope): boolean 
     (left.kind === 'legal_entity' && right.kind === 'legal_entity' ? left.legal_entity_id === right.legal_entity_id : left.kind === 'tenant' && right.kind === 'tenant')
 }
 
+function assertCatalogScope (scope: BusinessScope, catalog: ApplicationCatalog): void {
+  decodeContract<ApplicationCatalog>('ApplicationCatalog', catalog)
+  if (!sameBusinessScope(scope, catalog.business_scope)) throw new TypeError('Application catalog scope does not match scoped client')
+}
+
+function sameSchemaRef (left: SchemaRef, right: SchemaRef): boolean {
+  return left.id === right.id && left.version === right.version
+}
+
+function validateCatalogSchema (catalog: ApplicationCatalog, ref: SchemaRef, value: unknown): void {
+  const matches = catalog.schemas.filter(document => sameSchemaRef(document.ref, ref))
+  if (matches.length !== 1) throw new TypeError(`Catalog is missing one exact schema document: ${ref.id}@${ref.version}`)
+  assertPublishedSchema(matches[0]?.schema, value)
+}
+
+function validateOperationReceipt (scope: BusinessScope, operationRef: string, receipt: OperationReceipt): void {
+  if (receipt.operation_ref !== operationRef || !sameBusinessScope(receipt.business_scope, scope)) {
+    throw new TypeError('Operation receipt identity does not match the requested scope and operation')
+  }
+}
+
 export class KoraError extends Error {
   readonly status: number
   readonly detail?: unknown
+  readonly code?: string
 
-  constructor (message: string, status: number, detail?: unknown) {
+  constructor (message: string, status: number, detail?: unknown, code?: string) {
     super(message)
     this.name = 'KoraError'
     this.status = status
     this.detail = detail
+    this.code = code
   }
+}
+
+function errorCode (detail: unknown): string | undefined {
+  if (detail === null || typeof detail !== 'object' || Array.isArray(detail)) return undefined
+  const candidate = (detail as { code?: unknown; type?: unknown }).code ?? (detail as { type?: unknown }).type
+  return typeof candidate === 'string' ? candidate : undefined
 }
 
 function isRequestPage (value: unknown, itemType: 'RequestView' | 'RequestHistoryEntry'): boolean {

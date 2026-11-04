@@ -1,6 +1,6 @@
 {
   "name": "@kora/extension-sdk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "TypeScript SDK for building Kora extensions",
   "type": "module",
   "main": "./dist/index.js",
@@ -21,6 +21,8 @@
     "dev": "tsc --watch",
     "test": "bun test",
     "check:contracts": "bun scripts/check-contract-bundle.ts",
+    "check:example": "bunx tsc --noEmit --strict --target ES2022 --module ESNext --moduleResolution bundler --lib ES2022,DOM --skipLibCheck examples/extension-conformance.ts",
+    "test:extension-conformance": "bun examples/extension-conformance.ts",
     "lint": "neostandard",
     "lint:fix": "neostandard --fix",
     "prepublishOnly": "npm run build && npm run lint && npm test"
