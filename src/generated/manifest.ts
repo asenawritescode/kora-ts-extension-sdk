@@ -2,9 +2,9 @@
 // engine-v2.ts. Regenerate it only when the Engine contract artifact changes.
 export const ENGINE_CONTRACT_MANIFEST = {
   schemaVersion: 2,
-  sourceRevision: 'f22618f78ece6adec29bb18f765ca7b9e16f0fa1',
+  sourceRevision: '25c254758fe6bd41cfee3c09818669d44b34017b',
   sourceTree: 'clean',
   artifact: 'contract/generated/engine-v2.ts',
-  artifactSHA256: '9d51a7b8ea68a748f939a14d36c700969791acfcfd7003a453732a0a25f59a9d',
-  schemaSHA256: '8bb1dc611263213392114ee59e2e343d9ea9bd917953b7b544691b0a2c09c433',
+  artifactSHA256: 'd504bdb6ebff90409bec88588683de502d8dd9b642bbecf889f7e84e1ef95e1e',
+  schemaSHA256: '5c8ff139a013ea82eef631b4e5464c9856d1727a00948057b37382d67cbbf932',
 } as const
